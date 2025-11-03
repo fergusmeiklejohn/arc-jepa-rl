@@ -1,0 +1,25 @@
+# OOD evaluation configuration template
+seed: 7
+datasets:
+  - name: "arc_eval"
+    path: data/arc/arc_eval.jsonl
+  - name: "synthetic_ood"
+    path: data/ood/synthetic_eval.jsonl
+
+metrics:
+  success_rate: true
+  latent_distance: true
+  option_count: true
+  novelty_rate: true
+
+ood_axes:
+  structural:
+    withheld_primitives:
+      - rotate90
+      - mirror_x
+  semantic:
+    train_palette: 6
+    eval_palette: 9
+  programmatic:
+    max_depth_train: 3
+    max_depth_eval: 5
