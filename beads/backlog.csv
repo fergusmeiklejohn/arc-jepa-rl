@@ -1,0 +1,55 @@
+id,title,type,parent,depends_on,description
+E01,Project Setup & Decisions,epic,,,Establish structure, configs, CI, and key technical choices.
+E01-I01,Scaffold repo structure and configs,issue,E01,,Create arcgen/, training/, envs/, configs/, scripts/, tests/ with sample configs and README.
+E01-I02,Seed control and experiment logging,issue,E01,E01-I01,Global seeding utility and TensorBoard logging hooks available across training.
+E01-I03,Choose RL engine and JEPA objective (ADR),issue,E01,E01-I01,Record decision selecting RLlib/PufferLib and cosine vs InfoNCE with augmentation policy.
+E01-I04,CI smoke tests,issue,E01,E01-I01,CI runs unit tests for generator and JEPA forward pass on PR.
+E02,Grid Engine & Primitive Registry,epic,,,Core grid representation and primitive operators with tests.
+E02-I01,Implement Grid engine (NumPy) with RNG,issue,E02,E01-I01,Create/read/copy, palette ops, seeded randomness; unit tests.
+E02-I02,Primitive registry pattern,issue,E02,E02-I01,Register/lookup callables with metadata and parameter schemas.
+E02-I03,Geometry primitives,issue,E02,E02-I02,mirror, rotate90, translate; tests for shape and symmetry.
+E02-I04,Color/value primitives,issue,E02,E02-I02,recolor, invert_palette, threshold; tests for palette mapping.
+E02-I05,Topology/object primitives,issue,E02,E02-I02,flood_fill, merge_touching, extract_shape; tests on synthetic objects.
+E03,Program Synthesizer & Task Generator,epic,,,Compose primitives into programs; generate (input, output, rule_trace).
+E03-I01,Program grammar and sampler (SEQ/IF/REPEAT),issue,E03,E02-I02,Compose registered primitives with parameters.
+E03-I02,Task generator pipeline,issue,E03,E03-I01,Return grids + rule_trace deterministically under seed.
+E03-I03,Exporter (JSON + PNG) with schema,issue,E03,E03-I02,Save id, input, output, rule_trace, metadata; verify loader.
+E03-I04,Evaluator metrics,issue,E03,E03-I02,Compute complexity, object count, branching factor.
+E03-I05,Parallel generation CLI,issue,E03,E03-I03,Generate tasks in parallel with seeds and manifest.
+E04,Curriculum & Dataset Assembly,epic,,,Stage-wise samplers and build datasets per spec.
+E04-I01,Curriculum samplers (Phases I–V),issue,E04,E03-I01,Configs for Atomic, Sequential, Conditional, Recursive, Meta.
+E04-I02,Dataset build scripts,issue,E04,"E03-I05;E04-I01",Emit manifests and data splits with fixed seeds.
+E04-I03,Pilot datasets (sanity 5k/10k),issue,E04,E04-I02,Sample datasets generated; spot-checked for diversity and validity.
+E04-I04,Full dataset generation (scaled),issue,E04,E04-I03,Produce full splits at target sizes; checksums recorded.
+E05,JEPA Model & Pretraining,epic,,,Implement JEPA encoder, loss, and training loop; run pretraining.
+E05-I01,JEPA encoder + projection heads,issue,E05,E01-I03,Configurable CNN/Transformer encoder with heads; forward test.
+E05-I02,Pair dataloader with augmentations,issue,E05,E04-I02,Loader yields context/target with masking, crop, color-shuffle.
+E05-I03,Losses (cosine and InfoNCE) pluggable,issue,E05,E05-I01,Loss abstraction with tests on toy data.
+E05-I04,Training loop + checkpoints + logs,issue,E05,"E05-I02;E05-I03",Runs on Pretrain-A/B; artifacts saved; metrics logged.
+E05-I05,Invariance probes,issue,E05,E05-I04,Probes show closeness for symmetry and color permutations.
+E06,HRL Environment & Options,epic,,,Define env and executable options acting on grids toward goals.
+E06-I01,Gym-like ARC env,issue,E06,"E02-I01;E05-I01",reset/step; exact-match and timeout termination.
+E06-I02,Latent reward from JEPA,issue,E06,"E05-I04;E06-I01",R = -||z_pred - z_goal|| + novelty; normalized and stable.
+E06-I03,Option interface and parameter passing,issue,E06,"E02-I02;E06-I01",Wrap primitives with params; optional termination.
+E07,Imitation Pretraining & RL Fine-Tuning,epic,,,Initialize options with BC; fine-tune with RL using latent rewards.
+E07-I01,Trajectory extraction from rule_traces,issue,E07,"E03-I02;E06-I03",Convert traces to supervised tuples for BC.
+E07-I02,Behavioral cloning for option policies,issue,E07,E07-I01,Policies reach target success on Atomic tasks.
+E07-I03,RL fine-tuning (PPO/A2C),issue,E07,"E01-I03;E06-I02;E07-I02",Improves success on Sequential/Conditional vs BC-only.
+E07-I04,Reward shaping and stability ablation,issue,E07,E07-I03,Compare with/without JEPA reward and novelty bonus.
+E08,Meta-JEPA (Rule-Space Learning),epic,,,Learn task-family embeddings and retrieval.
+E08-I01,Rule-family dataset from traces,issue,E08,E04-I02,Define families; positive/negative sampling strategy.
+E08-I02,Meta-JEPA model + contrastive training,issue,E08,"E05-I01;E08-I01",Clustering and k-NN retrieval surpass baseline.
+E08-I03,Integration hooks for planner,issue,E08,"E08-I02;E06-I03",API to query nearest rule families to guide options.
+E09,Evaluation & OOD Benchmarks,epic,,,Unified evaluation harness across ARC-1/2 and OOD axes.
+E09-I01,ARC dataset loader/adapters,issue,E09,E06-I01,Load and adapt ARC tasks to env format.
+E09-I02,OOD split definitions and configs,issue,E09,E04-I02,Structural, semantic, program, causal OOD configs.
+E09-I03,Evaluation runner + metrics,issue,E09,"E09-I01;E09-I02;E07-I03",Report success, latent distance, options executed, novelty.
+E09-I04,Ablation suite,issue,E09,E09-I03,Compare no-BC, no-JEPA reward, no-meta variants.
+E10,Visualization & UX,epic,,,Make training and data interpretable.
+E10-I01,Grid/task viewer (Streamlit),issue,E10,E03-I03,Browse input/output and rule_trace; export samples.
+E10-I02,Latent space visualization,issue,E10,"E05-I04;E08-I02",t-SNE/UMAP plots; nearest-neighbor demos.
+E10-I03,Experiment dashboard,issue,E10,"E05-I04;E07-I03;E09-I03",Training curves and eval metrics in one place.
+E11,Advanced: Latent Option Discovery,epic,,,Auto-spawn new primitives from latent clusters and distill them.
+E11-I01,Cluster unexplained latent deltas,issue,E11,"E05-I04;E07-I03",Pipeline outputs candidate clusters with coverage stats.
+E11-I02,Symbolic distillation into new options,issue,E11,"E11-I01;E02-I02",Add new options to registry with minimal spec and tests.
+E11-I03,Curriculum auto-tuning,issue,E11,"E04-I01;E11-I02",Sampler adapts based on JEPA loss or HRL success rate.
