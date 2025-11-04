@@ -2,10 +2,15 @@
 seed: 123
 dataset_manifest: data/manifests/pretrain_a.jsonl
 
+data:
+  context_window: 3  # number of sequential grids per sample (k)
+  target_offset: 1   # predict one step ahead
+
 model:
   type: "conv"
-  embedding_dim: 256
-  projection_dim: 128
+  embedding_dim: 512
+  projection_dim: 256
+  projection_layers: 2
 
 optimizer:
   name: "adam"
@@ -19,9 +24,14 @@ training:
 
 augmentations:
   mask_ratio: 0.2
-  color_shuffle: true
-  random_crop: true
+  random_crop_radius: 1
+  palette_permutation: true
+  gaussian_noise_std: 0.05
+  min_grid_size_for_crop: 8
 
 loss:
-  objective: "cosine"
-  temperature: 0.1
+  objective: "infonce"
+  temperature_init: 0.07
+  temperature_bounds: [0.03, 0.3]
+  learnable_temperature: true
+  queue_size: 4096

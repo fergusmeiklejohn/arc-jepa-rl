@@ -25,3 +25,10 @@ and evaluate out-of-distribution reasoning.
 
 > This project is under active development. Consult the blueprint documents for
 > the full roadmap and open Beads issues for next steps.
+
+## Decision Records
+
+Architecture choices are tracked in `docs/adr/`.
+- `0001-rl-engine.md` — RLlib selected for hierarchical option training.
+- `0002-jepa-objective.md` — JEPA uses multi-step InfoNCE with memory queue and
+  specified augmentation policy.
