@@ -1,3 +1,7 @@
+# What we are building
+Read the docs: Project_Blueprint.md
+(Note keep this updated as the project plan evolves)
+
 ## Issue Tracking with bd (beads)
 
 IMPORTANT: This project uses bd (beads) for ALL issue tracking. Do NOT use markdown TODOs, task lists, or other tracking methods.

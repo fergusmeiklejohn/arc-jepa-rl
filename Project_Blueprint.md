@@ -28,6 +28,21 @@ Together, they enable a pipeline from concrete perception → abstract structure
 | **C. Meta-Generalization (Meta-JEPA)** | Model relationships among rules | Generated rule compositions | Learn to infer rules from few examples |
 | **D. OOD Evaluation** | Test zero-shot and compositional reasoning | ARC Eval + human-crafted tasks | Measure imagination and abstraction |
 
+### 2.1 Staged Implementation Tracker (Beads)
+The following Beads issues track concrete, staged milestones that operationalize this plan:
+
+- JEPA InfoNCE objective + projection head + memory queue — arc-jepa-rl-4fd0 (P1)
+- JEPA dataset loader + augmentations + JSONL manifest reader — arc-jepa-rl-1b0e (P1)
+- Relational attention/GNN over object tokens using adjacency — arc-jepa-rl-b062 (P2)
+- Synthetic ARC generator + JSONL exporter (Atomic→Sequential curriculum) — arc-jepa-rl-78eb (P1)
+- Define ARC DSL and symbolic enumerator — arc-jepa-rl-fb5b.3 (P1, in_progress)
+- HRL options + envs with JEPA latent reward — arc-jepa-rl-c8da (P1)
+- Meta-JEPA rule-family trainer — arc-jepa-rl-217a (P2)
+
+Notes:
+- JEPA representation work (above) feeds HRL options and Meta-JEPA; generator and DSL enable curriculum and symbolic evaluation.
+- Refer to `.beads/issues.jsonl` for live status; new work should be created in Beads and linked via discovered-from.
+
 ---
 
 ## 3. Stage A: JEPA Pretraining
