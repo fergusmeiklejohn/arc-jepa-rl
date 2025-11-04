@@ -219,3 +219,67 @@ def translate(grid: "Grid", dx: int = 0, dy: int = 0, *, fill: int = 0) -> "Grid
                     new_cells[ny][nx] = value
 
     return Grid(new_cells)
+
+
+# Color/value primitives -------------------------------------------------------
+
+
+@register_primitive(
+    "recolor",
+    category="color",
+    description="Map one value to another across the entire grid.",
+    parameters=[
+        ParameterSpec("source", "int", "Value to replace."),
+        ParameterSpec("target", "int", "Replacement value."),
+    ],
+)
+def recolor(grid: "Grid", source: int, target: int) -> "Grid":
+    from .grid import Grid
+
+    if not all(isinstance(val, int) for val in (source, target)):
+        raise TypeError("source and target must be integers")
+    return grid.replace(source, target)
+
+
+@register_primitive(
+    "invert_palette",
+    category="color",
+    description="Invert the palette order so lowest value becomes highest and vice versa.",
+)
+def invert_palette(grid: "Grid") -> "Grid":
+    from .grid import Grid
+
+    palette = grid.palette()
+    if not palette:
+        return grid.copy()
+    mapping = {value: palette[-idx - 1] for idx, value in enumerate(palette)}
+    return Grid([[mapping[value] for value in row] for row in grid.cells])
+
+
+@register_primitive(
+    "threshold_gt",
+    category="color",
+    description="Return binary grid where cells > threshold become high value.",
+    parameters=[
+        ParameterSpec("threshold", "int", "Threshold to compare against."),
+        ParameterSpec(
+            "low",
+            "int",
+            "Value for cells <= threshold.",
+            default=0,
+        ),
+        ParameterSpec(
+            "high",
+            "int",
+            "Value for cells > threshold.",
+            default=1,
+        ),
+    ],
+)
+def threshold_gt(grid: "Grid", threshold: int, *, low: int = 0, high: int = 1) -> "Grid":
+    from .grid import Grid
+
+    if not all(isinstance(val, int) for val in (threshold, low, high)):
+        raise TypeError("threshold, low, and high must be integers")
+
+    return Grid([[high if value > threshold else low for value in row] for row in grid.cells])
