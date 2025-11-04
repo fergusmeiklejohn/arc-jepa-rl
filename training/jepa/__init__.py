@@ -23,6 +23,11 @@ from .loop import (
     OptimizerConfig,
     TrainStepResult,
 )
+from .dataset import (
+    GridPairBatch,
+    InMemoryGridPairDataset,
+    build_dummy_dataset,
+)
 
 __all__ = [
     "EncodedPairBatch",
@@ -34,12 +39,15 @@ __all__ = [
     "ObjectCentricJEPAExperiment",
     "OptimizerConfig",
     "TrainStepResult",
+    "GridPairBatch",
+    "InMemoryGridPairDataset",
     "build_object_centric_encoder_from_config",
     "build_object_encoder",
     "build_object_token_batch",
     "build_object_tokenizer_config",
     "build_trainer_from_config",
     "build_trainer_from_file",
+    "build_dummy_dataset",
     "encode_context_target",
     "load_jepa_config",
 ]

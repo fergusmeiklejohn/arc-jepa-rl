@@ -3,7 +3,12 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from arcgen import Grid
-from training.jepa import ObjectCentricJEPAExperiment
+from training.jepa import (
+    ObjectCentricJEPAExperiment,
+    InMemoryGridPairDataset,
+    GridPairBatch,
+    build_dummy_dataset,
+)
 
 
 def config_with_optimizer():
@@ -43,3 +48,22 @@ def test_experiment_train_step_runs_and_returns_loss():
     assert isinstance(result.loss, float)
     assert result.encoded_context.shape[0] == len(context)
     assert result.encoded_target.shape[0] == len(target)
+
+
+def test_train_epoch_returns_average_loss():
+    config = config_with_optimizer()
+    experiment = ObjectCentricJEPAExperiment(config)
+    dataset = build_dummy_dataset(num_batches=3)
+
+    loss = experiment.train_epoch(dataset)
+    assert isinstance(loss, float)
+
+
+def test_train_over_epochs_accumulates_losses():
+    config = config_with_optimizer()
+    experiment = ObjectCentricJEPAExperiment(config)
+
+    dataset = InMemoryGridPairDataset([build_sample_grids()])
+    losses = experiment.train(dataset, epochs=2)
+
+    assert len(losses) == 2

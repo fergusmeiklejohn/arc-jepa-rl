@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping, Sequence
+from typing import Iterable, Mapping, Sequence
 
 from arcgen import Grid
 
+from .dataset import GridPairBatch, InMemoryGridPairDataset
 from .trainer import ObjectCentricJEPATrainer
 
 try:  # pragma: no cover - optional
@@ -103,3 +104,33 @@ class ObjectCentricJEPAExperiment:
             encoded_context=embeddings_context.detach().cpu(),
             encoded_target=embeddings_target.detach().cpu(),
         )
+
+    def train_epoch(
+        self,
+        dataset: Iterable[GridPairBatch],
+    ) -> float:
+        total_loss = 0.0
+        batches = 0
+        for batch in dataset:
+            result = self.train_step(batch.context, batch.target)
+            total_loss += result.loss
+            batches += 1
+
+        if batches == 0:
+            raise ValueError("dataset yielded no batches")
+
+        return total_loss / batches
+
+    def train(
+        self,
+        dataset: Iterable[GridPairBatch],
+        epochs: int = 1,
+    ) -> Sequence[float]:
+        if epochs <= 0:
+            raise ValueError("epochs must be positive")
+
+        losses = []
+        for _ in range(epochs):
+            epoch_loss = self.train_epoch(dataset)
+            losses.append(epoch_loss)
+        return losses
