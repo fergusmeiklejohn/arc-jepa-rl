@@ -6,6 +6,21 @@ data:
   context_window: 3  # number of sequential grids per sample (k)
   target_offset: 1   # predict one step ahead
 
+tokenizer:
+  max_objects: 16
+  max_color_features: 10
+  background: 0
+  connectivity: 4
+  normalize: true
+  respect_colors: true
+
+object_encoder:
+  hidden_dim: 256
+  num_embeddings: 512
+  commitment_cost: 0.25
+  ema_decay: 0.99
+  activation: "gelu"
+
 model:
   type: "conv"
   embedding_dim: 512
