@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
@@ -283,3 +284,175 @@ def threshold_gt(grid: "Grid", threshold: int, *, low: int = 0, high: int = 1) -
         raise TypeError("threshold, low, and high must be integers")
 
     return Grid([[high if value > threshold else low for value in row] for row in grid.cells])
+
+
+# Topology/Object primitives ---------------------------------------------------
+
+
+def _flood_fill_data(cells, start_y: int, start_x: int):
+    height = len(cells)
+    width = len(cells[0])
+    target = cells[start_y][start_x]
+    visited = set()
+    queue = [(start_y, start_x)]
+    component = []
+
+    while queue:
+        y, x = queue.pop()
+        if (y, x) in visited:
+            continue
+        visited.add((y, x))
+        component.append((y, x))
+
+        for ny, nx in ((y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)):
+            if 0 <= ny < height and 0 <= nx < width and cells[ny][nx] == target:
+                queue.append((ny, nx))
+
+    return component, target
+
+
+def _collect_non_background_component(cells, start_y: int, start_x: int, background_value: int):
+    height = len(cells)
+    width = len(cells[0])
+    visited = set()
+    queue = [(start_y, start_x)]
+    component = []
+
+    while queue:
+        y, x = queue.pop()
+        if (y, x) in visited:
+            continue
+        visited.add((y, x))
+
+        if cells[y][x] == background_value:
+            continue
+
+        component.append((y, x))
+
+        for ny, nx in ((y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)):
+            if 0 <= ny < height and 0 <= nx < width:
+                queue.append((ny, nx))
+
+    return component
+
+
+@register_primitive(
+    "flood_fill",
+    category="topology",
+    description="Flood fill connected region starting at (y, x).",
+    parameters=[
+        ParameterSpec("y", "int", "Row index of seed cell."),
+        ParameterSpec("x", "int", "Column index of seed cell."),
+        ParameterSpec("fill", "int", "Value to fill the region with."),
+    ],
+)
+def flood_fill(grid: "Grid", y: int, x: int, fill: int) -> "Grid":
+    from .grid import Grid
+
+    if not all(isinstance(val, int) for val in (y, x, fill)):
+        raise TypeError("y, x, and fill must be integers")
+
+    height, width = grid.shape
+    if not (0 <= y < height and 0 <= x < width):
+        raise ValueError("seed coordinates out of bounds")
+
+    component, target = _flood_fill_data(grid.cells, y, x)
+    if target == fill:
+        return grid.copy()
+
+    new_cells = [list(row) for row in grid.cells]
+    for cy, cx in component:
+        new_cells[cy][cx] = fill
+
+    return Grid(new_cells)
+
+
+@register_primitive(
+    "extract_shape",
+    category="topology",
+    description="Extract a connected component seeded at (y, x) into a minimal bounding box.",
+    parameters=[
+        ParameterSpec("y", "int", "Row index of seed cell."),
+        ParameterSpec("x", "int", "Column index of seed cell."),
+        ParameterSpec(
+            "background",
+            "int",
+            "Background fill for the bounding box outside component.",
+            default=0,
+        ),
+    ],
+)
+def extract_shape(grid: "Grid", y: int, x: int, *, background: int = 0) -> "Grid":
+    from .grid import Grid
+
+    if not all(isinstance(val, int) for val in (y, x, background)):
+        raise TypeError("y, x, and background must be integers")
+
+    height, width = grid.shape
+    if not (0 <= y < height and 0 <= x < width):
+        raise ValueError("seed coordinates out of bounds")
+
+    palette_counts = Counter(value for row in grid.cells for value in row)
+    background_value, _ = palette_counts.most_common(1)[0]
+    component = _collect_non_background_component(grid.cells, y, x, background_value)
+
+    if not component:
+        return Grid([[background]])
+    rows = [cy for cy, _ in component]
+    cols = [cx for _, cx in component]
+    min_y, max_y = min(rows), max(rows)
+    min_x, max_x = min(cols), max(cols)
+
+    box_height = max_y - min_y + 1
+    box_width = max_x - min_x + 1
+
+    new_cells = [[background for _ in range(box_width)] for _ in range(box_height)]
+    for cy, cx in component:
+        new_cells[cy - min_y][cx - min_x] = grid.cells[cy][cx]
+
+    return Grid(new_cells)
+
+
+@register_primitive(
+    "merge_touching",
+    category="topology",
+    description="Merge two values when adjacent (4-neighbour) into target value.",
+    parameters=[
+        ParameterSpec("value_a", "int", "First value to merge."),
+        ParameterSpec("value_b", "int", "Second value to merge."),
+        ParameterSpec("target", "int", "Merged value."),
+    ],
+)
+def merge_touching(grid: "Grid", value_a: int, value_b: int, target: int) -> "Grid":
+    from .grid import Grid
+
+    if not all(isinstance(val, int) for val in (value_a, value_b, target)):
+        raise TypeError("value_a, value_b, and target must be integers")
+
+    height, width = grid.shape
+    new_cells = [list(row) for row in grid.cells]
+
+    directions = (
+        (0, 1),
+        (1, 0),
+        (0, -1),
+        (-1, 0),
+        (1, 1),
+        (1, -1),
+        (-1, 1),
+        (-1, -1),
+    )
+
+    for y in range(height):
+        for x in range(width):
+            for dy, dx in directions:
+                ny, nx = y + dy, x + dx
+                if not (0 <= ny < height and 0 <= nx < width):
+                    continue
+                v1 = grid.cells[y][x]
+                v2 = grid.cells[ny][nx]
+                if {v1, v2} == {value_a, value_b}:
+                    new_cells[y][x] = target
+                    new_cells[ny][nx] = target
+
+    return Grid(new_cells)
