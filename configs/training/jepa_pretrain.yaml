@@ -50,3 +50,6 @@ loss:
   temperature_bounds: [0.03, 0.3]
   learnable_temperature: true
   queue_size: 4096
+  projection_dim: 256
+  projection_layers: 2
+  projection_activation: "relu"

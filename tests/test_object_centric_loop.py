@@ -67,3 +67,4 @@ def test_train_over_epochs_accumulates_losses():
     losses = experiment.train(dataset, epochs=2)
 
     assert len(losses) == 2
+    assert experiment.queue.get_negatives().shape[0] > 0
