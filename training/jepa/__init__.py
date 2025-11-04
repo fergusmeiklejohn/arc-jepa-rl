@@ -12,6 +12,12 @@ from .object_pipeline import (
     build_object_tokenizer_config,
     encode_context_target,
 )
+from .trainer import (
+    ObjectCentricJEPATrainer,
+    build_trainer_from_config,
+    build_trainer_from_file,
+    load_jepa_config,
+)
 
 __all__ = [
     "EncodedPairBatch",
@@ -19,9 +25,13 @@ __all__ = [
     "ObjectCentricJEPAEncoder",
     "ObjectEncoderConfig",
     "ObjectTokenizerConfig",
+    "ObjectCentricJEPATrainer",
     "build_object_centric_encoder_from_config",
     "build_object_encoder",
     "build_object_token_batch",
     "build_object_tokenizer_config",
+    "build_trainer_from_config",
+    "build_trainer_from_file",
     "encode_context_target",
+    "load_jepa_config",
 ]
