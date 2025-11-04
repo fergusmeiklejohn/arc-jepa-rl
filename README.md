@@ -12,7 +12,8 @@ and evaluate out-of-distribution reasoning.
   relational helpers in `arcgen/objects.py`.
 - `training/` — Training loops and experiment orchestration for JEPA, HRL, and
   Meta-JEPA components. Object tokenization and discrete latent modules live in
-  `training/modules/`, with object-centric JEPA helpers under `training/jepa/`.
+  `training/modules/`, object-centric JEPA helpers under `training/jepa/`, and
+  the typed DSL / enumerator scaffolding under `training/dsl/`.
 - `envs/` — Environment wrappers exposing ARC-style tasks to RL agents.
 - `configs/` — YAML configuration files for data generation, training, and
   evaluation runs.
