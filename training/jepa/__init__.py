@@ -18,6 +18,11 @@ from .trainer import (
     build_trainer_from_file,
     load_jepa_config,
 )
+from .loop import (
+    ObjectCentricJEPAExperiment,
+    OptimizerConfig,
+    TrainStepResult,
+)
 
 __all__ = [
     "EncodedPairBatch",
@@ -26,6 +31,9 @@ __all__ = [
     "ObjectEncoderConfig",
     "ObjectTokenizerConfig",
     "ObjectCentricJEPATrainer",
+    "ObjectCentricJEPAExperiment",
+    "OptimizerConfig",
+    "TrainStepResult",
     "build_object_centric_encoder_from_config",
     "build_object_encoder",
     "build_object_token_batch",

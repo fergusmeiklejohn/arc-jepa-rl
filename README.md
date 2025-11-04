@@ -17,6 +17,7 @@ and evaluate out-of-distribution reasoning.
 - `configs/` — YAML configuration files for data generation, training, and
   evaluation runs.
 - `scripts/` — Command-line entry points for dataset generation and training.
+  - `train_jepa.py` — CLI stub that exercises the object-centric JEPA encoder (supports `--dry-run`).
 - `tests/` — Unit and integration tests covering generators, models, and envs.
 
 ## Getting Started
