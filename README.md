@@ -8,9 +8,11 @@ and evaluate out-of-distribution reasoning.
 ## Repository Layout
 
 - `arcgen/` — Core grid utilities, primitive transformations, and program
-  synthesizers for generating ARC-like tasks.
+  synthesizers for generating ARC-like tasks. Includes object extraction and
+  relational helpers in `arcgen/objects.py`.
 - `training/` — Training loops and experiment orchestration for JEPA, HRL, and
-  Meta-JEPA components.
+  Meta-JEPA components. Object tokenization and discrete latent modules live in
+  `training/modules/`.
 - `envs/` — Environment wrappers exposing ARC-style tasks to RL agents.
 - `configs/` — YAML configuration files for data generation, training, and
   evaluation runs.
