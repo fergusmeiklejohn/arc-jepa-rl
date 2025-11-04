@@ -12,6 +12,7 @@ except Exception:  # pragma: no cover
     nn = object  # type: ignore
 
 from .vq import VectorQuantizer, VectorQuantizerUnavailable
+from .relational import RelationalAggregator, RelationalModuleUnavailable
 
 
 class ObjectTokenEncoderUnavailable(RuntimeError):
@@ -32,6 +33,7 @@ if torch is not None:  # pragma: no branch
             commitment_cost: float = 0.25,
             ema_decay: float | None = 0.99,
             activation: str = "gelu",
+            relational: bool = True,
         ) -> None:
             super().__init__()
 
@@ -53,6 +55,8 @@ if torch is not None:  # pragma: no branch
                 nn.Linear(hidden_dim, hidden_dim),
             )
 
+            self.relational = RelationalAggregator(hidden_dim) if relational else None
+
             if num_embeddings is not None:
                 self.vq = VectorQuantizer(
                     num_embeddings=num_embeddings,
@@ -63,7 +67,12 @@ if torch is not None:  # pragma: no branch
             else:
                 self.vq = None
 
-        def forward(self, features: "torch.Tensor", mask: "torch.Tensor | None" = None) -> dict:
+        def forward(
+            self,
+            features: "torch.Tensor",
+            mask: "torch.Tensor | None" = None,
+            adjacency: "torch.Tensor | None" = None,
+        ) -> dict:
             if features.dim() != 3:
                 raise ValueError("features must have shape (batch, objects, feature_dim)")
             if mask is None:
@@ -72,6 +81,12 @@ if torch is not None:  # pragma: no branch
                 raise ValueError("mask must have shape (batch, objects)")
 
             embeddings = self.proj(features)
+
+            if self.relational is not None:
+                if adjacency is None:
+                    raise ValueError("adjacency matrix must be provided when relational aggregation is enabled")
+                embeddings = self.relational(embeddings, adjacency, mask)
+
             vq_loss = None
             vq_indices = None
 
@@ -95,4 +110,3 @@ else:  # pragma: no cover - executed only when torch missing
             raise ObjectTokenEncoderUnavailable(
                 "PyTorch is required to use training.modules.object_encoder.ObjectTokenEncoder"
             )
-

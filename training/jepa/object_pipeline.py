@@ -161,7 +161,7 @@ class ObjectCentricJEPAEncoder:
             raise ValueError("grids must contain at least one entry")
 
         batch = build_object_token_batch(grids, self.tokenizer_config, device=device)
-        encoder_out = self.encoder(batch.features, mask=batch.mask)
+        encoder_out = self.encoder(batch.features, mask=batch.mask, adjacency=batch.adjacency)
 
         return ObjectCentricEncoding(
             embeddings=encoder_out["embeddings"],

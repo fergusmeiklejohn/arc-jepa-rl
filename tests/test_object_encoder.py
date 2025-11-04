@@ -18,9 +18,10 @@ def test_object_token_encoder_forward_shapes():
     tokens = tokenize_grid_objects(grid, max_objects=3, max_color_features=2)
     features = torch.tensor(tokens.features, dtype=torch.float32).unsqueeze(0)
     mask = torch.tensor(tokens.mask, dtype=torch.float32).unsqueeze(0)
+    adjacency = torch.tensor(tokens.adjacency, dtype=torch.float32).unsqueeze(0)
 
     encoder = ObjectTokenEncoder(feature_dim=features.size(-1), hidden_dim=8, num_embeddings=4, commitment_cost=0.5)
-    output = encoder(features, mask)
+    output = encoder(features, mask, adjacency)
 
     assert output["embeddings"].shape == (1, 3, 8)
     assert output["mask"].shape == (1, 3)
@@ -33,8 +34,10 @@ def test_object_token_encoder_without_vq_returns_none_loss():
     tokens = tokenize_grid_objects(grid, max_objects=1, max_color_features=1)
     features = torch.tensor(tokens.features, dtype=torch.float32).unsqueeze(0)
 
-    encoder = ObjectTokenEncoder(feature_dim=features.size(-1), hidden_dim=4, num_embeddings=None)
-    output = encoder(features)
+    adjacency = torch.tensor(tokens.adjacency, dtype=torch.float32).unsqueeze(0)
+
+    encoder = ObjectTokenEncoder(feature_dim=features.size(-1), hidden_dim=4, num_embeddings=None, relational=False)
+    output = encoder(features, adjacency=adjacency)
 
     assert output["vq_loss"] is None
     assert output["vq_indices"] is None
