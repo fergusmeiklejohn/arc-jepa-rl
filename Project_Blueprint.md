@@ -33,18 +33,27 @@ Together, they enable a pipeline from concrete perception → abstract structure
 ## 3. Stage A: JEPA Pretraining
 
 ### Objective
-Train a **Context-Target JEPA** to predict latent changes between grid pairs without reconstructing pixels.
+Train an **object-centric Context-Target JEPA** to predict latent changes between grid pairs without reconstructing pixels, while preserving discrete relational structure.
 
 ### Input
 - Synthetic input-output pairs (100k+)
+- Object-centric view: each grid is decomposed into connected components with geometry/color features and adjacency graphs (see `arcgen/objects.py`)
 - Data augmentations: masking, cropping, noise, color shuffling
 
-### Loss
-- **Joint embedding predictive loss** (contrastive or cosine)
-- Invariance constraints for symmetry, color permutation, translation
+### Architecture & Loss
+- **Object tokenizer**: converts grids into padded sets of object tokens with relational adjacency (`training/modules/object_tokenizer.py`)
+- **Vector-quantized encoder**: projects object tokens through an MLP + VQ-VAE bottleneck to encourage crisp, reusable codes (`training/modules/vq.py`)
+- **Relational heads** (planned): self-attention / GNN layers operating over object tokens, leveraging adjacency matrices for symmetry and counting.
+- **Joint embedding predictive loss** (contrastive/multi-step InfoNCE) computed on mean-pooled object embeddings; future work adds relational consistency losses.
+- Invariance constraints for symmetry, color permutation, translation.
 
 ### Expected Outcome
-A **latent space** capturing transformation invariants (e.g., “reflection”, “flood-fill”, “recolor”).
+A **latent codebook** capturing transformation invariants (e.g., “reflection”, “flood-fill”, “recolor”) with discrete tokens that can be composed downstream by HRL and program-synthesis components.
+
+### Training Infrastructure
+- `training/jepa/object_pipeline.py` and `training/jepa/trainer.py` build the tokenizer/encoder from YAML configs and expose encoding helpers.
+- `training/jepa/loop.py` provides `ObjectCentricJEPAExperiment` with optimizer wiring and epoch helpers; `scripts/train_jepa.py --dry-run` exercises the stack.
+- Future milestones: integrate projection heads, InfoNCE queue, and dataset loader once synthetic manifests land.
 
 ---
 
@@ -67,6 +76,7 @@ A **latent space** capturing transformation invariants (e.g., “reflection”, 
 | Topology | Flood-fill, connect components |
 | Color | Remap palette, threshold |
 | Logic | If-condition-based replace, repeat-until-stable |
+| **Discovered Options** | Auto-promoted latent skills identified via VQ code clusters / curiosity (see Section 9) |
 
 ---
 
@@ -80,16 +90,38 @@ Train a **meta-model** that predicts transformations between *tasks*, not just *
 - Target: latent vector representing that rule family
 
 ### Training Signal
-Contrastive learning between rule embeddings:
-- Close for tasks from same transformation family
-- Distant for unrelated rule types
+- Contrastive learning between rule embeddings (close within families, distant otherwise)
+- Incorporate **neural program traces**: map JEPA latent deltas + primitive sequences into a DSL (Section 6b) to provide supervision for meta-rule clustering.
 
 ### Effect
-The model learns to reason in **rule space** — forming clusters of related transformations.
+The model learns to reason in **rule space** — forming clusters of related transformations, while emitting priors that guide few-shot program induction (Section 6c).
 
 ---
 
-## 6. Stage D: Out-of-Distribution Evaluation
+## 6. Symbolic-Neural Bridge & Few-Shot Inference
+
+### 6a. Object-Aware JEPA Outputs
+- JEPA yields discrete code indices (VQ) per object along with relational adjacency.
+- HRL consumes codes as option arguments; Meta-JEPA consumes aggregated summaries.
+
+### 6b. Program Synthesis Integration
+- Define a strongly-typed grid DSL (map/filter/group/paint/flood-fill, etc.) with cost heuristics.
+- Use JEPA object embeddings to produce **skeleton proposals**; perform neural-guided beam search over DSL instantiations.
+- Maintain a version space of programs consistent with provided examples; apply constraint solving for pruning (symmetry, color counts, adjacency checks).
+
+### 6c. Few-Shot Solver Pipeline
+1. Encode context/target examples with the object-centric JEPA encoder.
+2. Meta-JEPA provides priors over rule families and likely skeletons.
+3. Neural-guided enumerator scores candidate programs; symbolic executor validates against examples.
+4. Resulting program is executed on ARC test grids; fallback strategies include caching partial programs and using HRL options to refine mismatched outputs.
+
+### 6d. Evaluation Hooks
+- Track success rate vs. beam width, solver compute, and JEPA code diversity.
+- Ablations: JEPA-only embeddings, DSL-only search, hybrid pipeline.
+
+---
+
+## 7. Stage D: Out-of-Distribution Evaluation
 
 ### Datasets
 1. **ARC-1 Eval** (official)
@@ -100,6 +132,7 @@ The model learns to reason in **rule space** — forming clusters of related tra
 - Success rate (exact match)
 - Latent “distance-to-goal”
 - Number of options executed
+- Program search depth / enumerated candidates
 - Novel rule discovery rate (emergent skills)
 
 ---
@@ -127,6 +160,7 @@ The model learns to reason in **rule space** — forming clusters of related tra
 | **Noise Injection** | Add irrelevant patterns | Force relational focus |
 | **Meta-Rule Shifts** | Swap input/output roles | Teach causal inference |
 | **Interpolated Programs** | Blend two known rules | Encourage latent smoothness |
+| **Discoverable Primitives** | Generate patterns requiring novel subroutines | Test option discovery |
 
 All generators output (input grid, output grid, rule_trace).
 
@@ -135,18 +169,24 @@ All generators output (input grid, output grid, rule_trace).
 ## 8. Curriculum Design
 
 ### Phase 1 — Structural Pretraining
-- Train JEPA on synthetic data for 1–2 epochs.
-- Validate on small held-out synthetic set.
+- Train the object-centric JEPA encoder on synthetic data for 1–2 epochs (using `ObjectCentricJEPAExperiment`).
+- Validate on small held-out synthetic set; inspect VQ code usage and object-level reconstruction proxies.
 
 ### Phase 2 — Grounded Skill Learning
 - Initialize option policies via supervised imitation of known transformations.
 - Fine-tune with latent JEPA reward to discover efficient temporal compositions.
+- Auto-promote frequently-used VQ codes into the primitive registry.
 
 ### Phase 3 — Meta-Reasoning
 - Train meta-JEPA on embeddings of rulesets (task families).
 - Encourage clustering and relational prediction.
+- Align meta-JEPA outputs with DSL skeleton categories for better few-shot priors.
 
-### Phase 4 — OOD Reinforcement
+### Phase 4 — Symbolic Search & Few-Shot Evaluation
+- Integrate neural-guided program search; run few-shot evaluation loops.
+- Use discrepancies to trigger option discovery / data augmentation.
+
+### Phase 5 — OOD Reinforcement
 - Evaluate and fine-tune using exploration bonuses for **latent novelty** (e.g., high JEPA prediction error).
 - Curiosity drives discovery of new compositional primitives.
 
@@ -156,10 +196,11 @@ All generators output (input grid, output grid, rule_trace).
 
 | Growth Mechanism | Implementation | Effect |
 |------------------|----------------|--------|
-| **Latent Option Discovery** | Cluster unexplained transitions to spawn new skills | Expands primitive vocabulary |
+| **Latent Option Discovery** | Cluster unexplained transitions / VQ residues to spawn new skills | Expands primitive vocabulary |
 | **Curiosity Reward** | Reward transitions with high JEPA error | Encourages novelty search |
 | **Meta-JEPA Bootstrapping** | Predict rule embeddings for unseen tasks | Enables analogical reasoning |
 | **Symbolic Distillation** | Extract and name new skill clusters | Stabilizes compositional grammar |
+| **Program Cache Mining** | Promote frequently re-used program fragments into DSL macros | Accelerates few-shot solving |
 
 ---
 
@@ -167,8 +208,9 @@ All generators output (input grid, output grid, rule_trace).
 
 | Component | Library/Framework |
 |------------|------------------|
-| Representation Learning | PyTorch / Lightning |
+| Representation Learning | PyTorch / Lightning + object-centric modules (`training/jepa/*`) |
 | RL Engine | PufferLib / RLlib |
+| Program Search | Custom typed DSL + constraint solving + neural heuristics |
 | Data Generation | Python procedural grid DSL |
 | Evaluation | ARC runtime + JSON task specs |
 | Visualization | Streamlit / TensorBoard |
@@ -196,8 +238,10 @@ All generators output (input grid, output grid, rule_trace).
 
 ## Next Steps
 1. Implement a **synthetic ARC generator** with controllable rule grammar.  
-2. Pretrain a **JEPA backbone** on 50k+ synthetic pairs.  
-3. Train **option policies** with heuristic traces + RL fine-tuning.  
+2. Pretrain the **object-centric JEPA backbone** (tokenizer + VQ encoder) on 50k+ synthetic pairs, validating codebook usage.  
+3. Design and implement the **typed DSL enumerator** with neural guidance + constraint pruning.  
+4. Train **option policies** with heuristic traces + RL fine-tuning, seeding the primitive registry with discovered VQ skills.  
+5. Build the **few-shot solver loop** combining JEPA embeddings, Meta-JEPA priors, and DSL search; evaluate on ARC dev tasks.  
+6. Run ablations (JEPA-only, HRL-only, DSL-only, hybrid) to quantify contributions against the critique concerns.  
 4. Build **meta-JEPA** for task-level embedding and reasoning.  
 5. Benchmark systematically on ARC-1, ARC-2, and human-designed surprise tasks.
-
