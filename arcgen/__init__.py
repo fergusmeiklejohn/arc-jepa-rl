@@ -1,3 +1,5 @@
 """Core modules for synthetic ARC generation."""
 
-# Submodules will be populated as implementation progresses.
+from .grid import Grid, SeededRNG
+
+__all__ = ["Grid", "SeededRNG"]
