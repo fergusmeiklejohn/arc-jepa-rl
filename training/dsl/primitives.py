@@ -21,6 +21,7 @@ class Primitive:
     output_type: DSLType
     implementation: PrimitiveImpl
     description: str = ""
+    complexity: float = 1.0
 
     def __call__(self, *args) -> object:  # pragma: no cover - convenience
         return self.implementation(*args)
@@ -95,23 +96,30 @@ def build_default_primitive_registry(
 ) -> PrimitiveRegistry:
     registry = PrimitiveRegistry()
 
-    def make_grid_unary(name: str, impl: Callable[[ArcGrid], ArcGrid], description: str) -> Primitive:
+    def make_grid_unary(
+        name: str,
+        impl: Callable[[ArcGrid], ArcGrid],
+        description: str,
+        *,
+        complexity: float = 1.0,
+    ) -> Primitive:
         return Primitive(
             name=name,
             input_types=(Grid,),
             output_type=Grid,
             implementation=lambda grid: impl(_ensure_grid(grid)),
             description=description,
+            complexity=complexity,
         )
 
     registry.register_many(
         [
-            make_grid_unary("identity", _identity, "Return the grid unchanged"),
+            make_grid_unary("identity", _identity, "Return the grid unchanged", complexity=0.5),
             make_grid_unary("mirror_x", lambda g: _mirror("x", g), "Reflect grid across x-axis"),
             make_grid_unary("mirror_y", lambda g: _mirror("y", g), "Reflect grid across y-axis"),
-            make_grid_unary("rotate_cw", lambda g: _rotate(g, 1), "Rotate grid clockwise"),
-            make_grid_unary("rotate_ccw", lambda g: _rotate(g, 3), "Rotate grid counter-clockwise"),
-            make_grid_unary("rotate_180", lambda g: _rotate(g, 2), "Rotate grid by 180 degrees"),
+            make_grid_unary("rotate_cw", lambda g: _rotate(g, 1), "Rotate grid clockwise", complexity=1.2),
+            make_grid_unary("rotate_ccw", lambda g: _rotate(g, 3), "Rotate grid counter-clockwise", complexity=1.2),
+            make_grid_unary("rotate_180", lambda g: _rotate(g, 2), "Rotate grid by 180 degrees", complexity=1.3),
         ]
     )
 
@@ -122,6 +130,7 @@ def build_default_primitive_registry(
             output_type=Grid,
             implementation=lambda grid, src, dst: _recolor(_ensure_grid(grid), int(src), int(dst)),
             description="Replace all occurrences of source color with target color",
+            complexity=1.5,
         )
     )
 
@@ -132,6 +141,7 @@ def build_default_primitive_registry(
             output_type=Color,
             implementation=lambda grid: _dominant_color(_ensure_grid(grid)),
             description="Return the most frequent color in the grid",
+            complexity=1.2,
         )
     )
 
@@ -142,6 +152,7 @@ def build_default_primitive_registry(
             output_type=GridValue,
             implementation=lambda grid: _object_count(_ensure_grid(grid)),
             description="Count connected components in the grid",
+            complexity=1.3,
         )
     )
 
@@ -153,6 +164,7 @@ def build_default_primitive_registry(
                 output_type=Color,
                 implementation=lambda v=value: _color_constant(v),
                 description=f"Constant color {value}",
+                complexity=0.4,
             )
         )
 

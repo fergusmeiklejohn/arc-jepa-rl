@@ -58,7 +58,7 @@ Train an **object-centric Context-Target JEPA** to predict latent changes betwee
 ### Architecture & Loss
 - **Object tokenizer**: converts grids into padded sets of object tokens with relational adjacency (`training/modules/object_tokenizer.py`)
 - **Vector-quantized encoder**: projects object tokens through an MLP + VQ-VAE bottleneck to encourage crisp, reusable codes (`training/modules/vq.py`)
-- **Relational heads** (planned): self-attention / GNN layers operating over object tokens, leveraging adjacency matrices for symmetry and counting.
+- **Relational attention heads**: multi-layer adjacency-aware self-attention stack over object tokens (`training/modules/relational.py`) for symmetry and counting.
 - **Joint embedding predictive loss** (contrastive/multi-step InfoNCE) computed on mean-pooled object embeddings; future work adds relational consistency losses.
 - Invariance constraints for symmetry, color permutation, translation.
 
@@ -68,7 +68,7 @@ A **latent codebook** capturing transformation invariants (e.g., “reflection�
 ### Training Infrastructure
 - `training/jepa/object_pipeline.py` and `training/jepa/trainer.py` build the tokenizer/encoder from YAML configs and expose encoding helpers.
 - `training/jepa/loop.py` provides `ObjectCentricJEPAExperiment` with optimizer wiring and epoch helpers; `scripts/train_jepa.py --dry-run` exercises the stack.
-- Status update (2025-11-05): projection heads + InfoNCE queue + manifest loader now implemented; synthetic generator + latent option env wired for HRL integration; typed DSL primitives + enumerator + interpreter landed; neural guidance scaffolding (dataset builder, scorer, beam search, training CLI) in place. Next steps focus on relational attention.
+- Status update (2025-11-05): projection heads + InfoNCE queue + manifest loader now implemented; synthetic generator + latent option env wired for HRL integration; typed DSL primitives + enumerator + interpreter landed; neural guidance scaffolding (dataset builder, scorer, beam search, training CLI) in place; relational graph attention now backed by configurable multi-head layers in the object encoder.
 
 ---
 
@@ -111,6 +111,11 @@ Train a **meta-model** that predicts transformations between *tasks*, not just *
 ### Effect
 The model learns to reason in **rule space** — forming clusters of related transformations, while emitting priors that guide few-shot program induction (Section 6c).
 
+- Implementation status: `training/meta_jepa/` provides dataset builders, a
+  contrastive encoder, and a `MetaJEPATrainer` with CLI support
+  (`scripts/train_meta_jepa.py`) for learning rule-family embeddings that feed
+  few-shot priors.
+
 ---
 
 ## 6. Symbolic-Neural Bridge & Few-Shot Inference
@@ -126,13 +131,18 @@ The model learns to reason in **rule space** — forming clusters of related tra
 
 ### 6c. Few-Shot Solver Pipeline
 1. Encode context/target examples with the object-centric JEPA encoder.
-2. Meta-JEPA provides priors over rule families and likely skeletons.
+2. Meta-JEPA provides priors over rule families and likely skeletons (see
+   `training/meta_jepa/prior.py` — now wired into `GuidedBeamSearch` and the
+   `FewShotSolver` to bias program ordering).
 3. Neural-guided enumerator scores candidate programs; symbolic executor validates against examples.
 4. Resulting program is executed on ARC test grids; fallback strategies include caching partial programs and using HRL options to refine mismatched outputs.
 
 ### 6d. Evaluation Hooks
 - Track success rate vs. beam width, solver compute, and JEPA code diversity.
 - Ablations: JEPA-only embeddings, DSL-only search, hybrid pipeline.
+- `training/eval/` now provides an `EvaluationSuite` with CLI support
+  (`scripts/evaluate_arc.py`) to run DSL-only vs meta-guided ablations and
+  collect success/program-count metrics over JSONL task manifests.
 
 ---
 
@@ -200,6 +210,12 @@ All generators output (input grid, output grid, rule_trace).
 ### Phase 4 — Symbolic Search & Few-Shot Evaluation
 - Integrate neural-guided program search; run few-shot evaluation loops.
 - Use discrepancies to trigger option discovery / data augmentation.
+- Automated rollout mining (`training/options`) now discovers recurring option
+  sequences and promotes them into typed primitives with regression coverage
+  (`tests/test_option_discovery.py`).
+- The few-shot solver (`training/solver.FewShotSolver`) enumerates DSL programs
+  with optional neural guidance, consuming the promoted primitives to solve
+  demos under tight node budgets (`tests/test_few_shot_solver.py`).
 
 ### Phase 5 — OOD Reinforcement
 - Evaluate and fine-tune using exploration bonuses for **latent novelty** (e.g., high JEPA prediction error).

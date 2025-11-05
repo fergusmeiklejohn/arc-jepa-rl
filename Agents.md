@@ -70,6 +70,28 @@ bd automatically syncs with git:
 - Imports from JSONL when newer (e.g., after `git pull`)
 - No manual export/import needed!
 
+### Python Environment (uv)
+
+- Create the project virtualenv with `uv venv --python 3.11 .venv`.
+- Activate via `source .venv/bin/activate` (or the platform equivalent) before running commands.
+- Install dependencies with `uv pip install --python .venv/bin/python <package>`. Current baseline:
+  - `torch`
+  - `pyyaml`
+  - `numpy`
+  - `pytest`
+- Update this list when the dependency set changes so teammates can reproduce the environment.
+
+### Python Environment (uv)
+
+- Create the project virtualenv with `uv venv --python 3.11 .venv`.
+- Activate via `source .venv/bin/activate` (or the platform equivalent) before running commands.
+- Install dependencies with `uv pip install --python .venv/bin/python <package>`. Current baseline:
+  - `torch`
+  - `pyyaml`
+  - `numpy`
+  - `pytest`
+- Update this list when the dependency set changes so teammates can reproduce the environment.
+
 ### MCP Server (Recommended)
 
 If using Claude or MCP-compatible clients, install the beads MCP server:
@@ -117,6 +139,46 @@ Benefits:
 - Easy to exclude from version control if desired
 - Preserves planning history for archeological research
 - Reduces noise when browsing the project
+
+---
+
+## Run Environments & Processes
+
+### Local Development (MacBook Pro M3 Max, 36GB RAM)
+- Use `uv` to manage Python: `uv venv --python 3.11 .venv` then `source .venv/bin/activate`.
+- Install deps with `uv pip install --python .venv/bin/python torch pyyaml numpy pytest`.
+- What to run locally (fast iteration):
+  - Unit/integration tests: `.venv/bin/pytest` (target is green).
+  - Small synthetic datasets and sanity checks: `python scripts/generate_dataset.py ...`.
+  - JEPA dry-run or tiny epochs: `python scripts/train_jepa.py --dry-run --config <jepa.yaml>`.
+  - Latent env rollouts: `python scripts/rollout_latent_env.py --env-config <env.yaml> --jepa-config <jepa.yaml>`.
+  - Option discovery/promotion and few-shot solver on small sets.
+  - Meta-JEPA short runs on tiny JSONL to validate contrastive training.
+
+Notes: CPU PyTorch is fine for smoke tests; keep epochs small and batch sizes minimal.
+
+### GPU Training (Paperspace A6000, 8 CPUs, 48GB RAM)
+- Intended for larger JEPA/guidance/meta-JEPA training runs and heavy evaluations.
+- Process:
+  1) Push code to GitHub from local.
+  2) On Paperspace, pull latest (`git pull`), create env (`uv venv --python 3.11 .venv`), and install deps with `uv`.
+  3) Run training scripts with GPU-enabled PyTorch; use curated configs.
+  4) Persist artifacts (weights, JSON reports) back to repo or external storage as appropriate.
+
+### Scripts Overview
+- `scripts/train_jepa.py` — object-centric JEPA helper (supports `--dry-run`).
+- `scripts/rollout_latent_env.py` — simulate latent option env and produce traces.
+- `scripts/train_guidance.py` — train DSL guidance scorer (neural heuristic).
+- `scripts/train_meta_jepa.py` — train rule-family encoder on JSONL.
+- `scripts/evaluate_arc.py` — run DSL-only and meta-guided ablations and emit JSON.
+- `training/meta_jepa/prior.py` exposes `MetaJEPAPrior` for wiring trained rule-family
+  embeddings into `GuidedBeamSearch` or `FewShotSolver.solve(..., meta_prior=...)`
+  so Meta-JEPA biases DSL program ordering.
+
+---
+
+## Beads Tickets for In-Action Tests & Remaining Work
+All hands-on tests and remaining build items are tracked in Beads and linked to the epic `arc-jepa-rl-fb5b`. Use `bd ready --json` to view what’s unblocked.
 
 ### Important Rules
 
