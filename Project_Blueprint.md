@@ -68,7 +68,7 @@ A **latent codebook** capturing transformation invariants (e.g., â€œreflectionâ€
 ### Training Infrastructure
 - `training/jepa/object_pipeline.py` and `training/jepa/trainer.py` build the tokenizer/encoder from YAML configs and expose encoding helpers.
 - `training/jepa/loop.py` provides `ObjectCentricJEPAExperiment` with optimizer wiring and epoch helpers; `scripts/train_jepa.py --dry-run` exercises the stack.
-- Future milestones: integrate projection heads, InfoNCE queue, and dataset loader once synthetic manifests land.
+- Status update (2025-11-05): projection heads + InfoNCE queue + manifest loader now implemented; synthetic generator + latent option env wired for HRL integration. Next steps focus on DSL enumerator and relational attention.
 
 ---
 

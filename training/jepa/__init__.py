@@ -24,12 +24,15 @@ from .loop import (
     TrainStepResult,
 )
 from .dataset import (
+    AugmentationConfig,
     GridPairBatch,
     InMemoryGridPairDataset,
+    ManifestGridPairDataset,
     build_dummy_dataset,
 )
 
 __all__ = [
+    "AugmentationConfig",
     "EncodedPairBatch",
     "ObjectCentricEncoding",
     "ObjectCentricJEPAEncoder",
@@ -41,6 +44,7 @@ __all__ = [
     "TrainStepResult",
     "GridPairBatch",
     "InMemoryGridPairDataset",
+    "ManifestGridPairDataset",
     "build_object_centric_encoder_from_config",
     "build_object_encoder",
     "build_object_token_batch",

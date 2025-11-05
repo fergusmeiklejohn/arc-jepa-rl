@@ -104,11 +104,20 @@ class ObjectCentricJEPAExperiment:
             queue_size=self.loss_config.queue_size,
         ).to(self.device)
 
-        temperature_value = torch.tensor(self.loss_config.temperature_init, dtype=torch.float32)
+        self._temperature_bounds = (
+            float(self.loss_config.temperature_bounds[0]),
+            float(self.loss_config.temperature_bounds[1]),
+        )
+
+        temperature_value = torch.tensor(
+            self.loss_config.temperature_init,
+            dtype=torch.float32,
+            device=self.device,
+        )
         if self.loss_config.learnable_temperature:
             self.log_temperature = torch.nn.Parameter(torch.log(temperature_value))
         else:
-            self.register_buffer("log_temperature", torch.log(temperature_value))
+            self._log_temperature = torch.log(temperature_value).detach()
 
         opt_cfg = OptimizerConfig.from_mapping(config.get("optimizer"))
         params = list(self.trainer.encoder.parameters()) + list(self.projection_head.parameters())
@@ -139,6 +148,11 @@ class ObjectCentricJEPAExperiment:
         return summed / counts
 
     def _info_nce_loss(self, context_proj: torch.Tensor, target_proj: torch.Tensor) -> torch.Tensor:
+        if self.loss_config.learnable_temperature:
+            log_temperature = self.log_temperature
+        else:
+            log_temperature = self._log_temperature
+
         negatives_queue = self.queue.get_negatives()
 
         logits_pos = torch.sum(context_proj * target_proj, dim=-1, keepdim=True)
@@ -154,8 +168,8 @@ class ObjectCentricJEPAExperiment:
 
         logits = torch.cat([logits_pos, logits_inbatch, logits_queue], dim=1)
 
-        temperature = torch.exp(self.log_temperature)
-        min_temp, max_temp = self.loss_config.temperature_bounds
+        temperature = torch.exp(log_temperature)
+        min_temp, max_temp = self._temperature_bounds
         temperature = torch.clamp(temperature, min=min_temp, max=max_temp)
 
         logits = logits / temperature

@@ -9,6 +9,7 @@ from .primitives import (
     PrimitiveSpec,
     register_primitive,
 )
+from .generator import GeneratorConfig, SyntheticARCGenerator, SyntheticTask, ProgramStep
 
 __all__ = [
     "Grid",
@@ -21,4 +22,8 @@ __all__ = [
     "ParameterSpec",
     "register_primitive",
     "PRIMITIVE_REGISTRY",
+    "GeneratorConfig",
+    "SyntheticARCGenerator",
+    "SyntheticTask",
+    "ProgramStep",
 ]
