@@ -34,6 +34,9 @@ if torch is not None:  # pragma: no branch
             ema_decay: float | None = 0.99,
             activation: str = "gelu",
             relational: bool = True,
+            relational_layers: int = 2,
+            relational_heads: int = 4,
+            relational_dropout: float = 0.0,
         ) -> None:
             super().__init__()
 
@@ -55,7 +58,16 @@ if torch is not None:  # pragma: no branch
                 nn.Linear(hidden_dim, hidden_dim),
             )
 
-            self.relational = RelationalAggregator(hidden_dim) if relational else None
+            self.relational = (
+                RelationalAggregator(
+                    hidden_dim,
+                    num_layers=relational_layers,
+                    num_heads=relational_heads,
+                    dropout=relational_dropout,
+                )
+                if relational
+                else None
+            )
 
             if num_embeddings is not None:
                 self.vq = VectorQuantizer(

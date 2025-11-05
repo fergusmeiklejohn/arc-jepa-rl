@@ -55,6 +55,10 @@ class ObjectEncoderConfig:
     commitment_cost: float = 0.25
     ema_decay: float | None = 0.99
     activation: str = "gelu"
+    relational: bool = True
+    relational_layers: int = 2
+    relational_heads: int = 4
+    relational_dropout: float = 0.0
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, object] | None) -> "ObjectEncoderConfig":
@@ -66,6 +70,10 @@ class ObjectEncoderConfig:
             commitment_cost=float(data.get("commitment_cost", cls.commitment_cost)),
             ema_decay=data.get("ema_decay", cls.ema_decay),
             activation=str(data.get("activation", cls.activation)),
+            relational=bool(data.get("relational", cls.relational)),
+            relational_layers=int(data.get("relational_layers", cls.relational_layers)),
+            relational_heads=int(data.get("relational_heads", cls.relational_heads)),
+            relational_dropout=float(data.get("relational_dropout", cls.relational_dropout)),
         )
 
 
@@ -196,6 +204,10 @@ def build_object_encoder(
         commitment_cost=encoder_cfg.commitment_cost,
         ema_decay=encoder_cfg.ema_decay,
         activation=encoder_cfg.activation,
+        relational=encoder_cfg.relational,
+        relational_layers=encoder_cfg.relational_layers,
+        relational_heads=encoder_cfg.relational_heads,
+        relational_dropout=encoder_cfg.relational_dropout,
     )
 
 

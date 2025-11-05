@@ -66,6 +66,10 @@ def test_build_from_config_helpers():
         "commitment_cost": 0.75,
         "ema_decay": 0.95,
         "activation": "relu",
+        "relational_layers": 1,
+        "relational_heads": 3,
+        "relational_dropout": 0.0,
+        "relational": True,
     }
 
     wrapper = build_object_centric_encoder_from_config(tokenizer_cfg, encoder_cfg)

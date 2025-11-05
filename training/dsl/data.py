@@ -46,7 +46,7 @@ class GuidanceDataset(Dataset):  # type: ignore[misc]
 
     def __getitem__(self, idx: int):  # pragma: no cover - thin wrapper
         example = self.examples[idx]
-        vector = example.features.stacked()
+        vector = example.features.stacked().detach()
         label = torch.tensor(example.improvement, dtype=torch.float32, device=vector.device)
         return vector, label, example.success
 
@@ -109,4 +109,3 @@ def build_guidance_examples(
             count += 1
 
     return examples
-
