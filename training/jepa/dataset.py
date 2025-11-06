@@ -164,6 +164,17 @@ def _examples_from_record(
         )
         return
 
+    if "input" in data and "output" in data:
+        context_grid = _grid_from_data(data["input"])
+        target_grid = _grid_from_data(data["output"])
+        yield ManifestExample(
+            context=context_grid,
+            target=target_grid,
+            metadata=base_meta,
+            context_sequence=(context_grid,),
+        )
+        return
+
     if "frames" in data:
         frames_data = data["frames"]
         if not isinstance(frames_data, Sequence):
