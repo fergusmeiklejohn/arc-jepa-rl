@@ -1,0 +1,23 @@
+# Curriculum dataset mixing atomic and sequential programs
+seed: 123
+output_root: data/pilot_curriculum
+
+task_schedule:
+  atomic: 3500
+  sequential: 1500
+
+generator:
+  grid_size:
+    min: 6
+    max: 12
+  colors:
+    min: 4
+    max: 6
+  background_color: 0
+  fill_probability: 0.7
+  max_parameter_retries: 8
+  max_task_retries: 16
+
+export:
+  include_png: false
+  compress_json: false

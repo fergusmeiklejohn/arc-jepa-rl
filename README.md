@@ -21,7 +21,8 @@ and evaluate out-of-distribution reasoning.
 - `configs/` — YAML configuration files for data generation, training, and
   evaluation runs.
 - `scripts/` — Command-line entry points for dataset generation and training.
-  - `train_jepa.py` — CLI stub that exercises the object-centric JEPA encoder (supports `--dry-run`).
+  - `generate_dataset.py` — Build synthetic manifests; supports curriculum schedules and `allowed_primitives` constraints.
+  - `train_jepa.py` — Run manifest-backed JEPA pretraining (supports `--dry-run` and `--device`).
   - `train_meta_jepa.py` — Train the rule-family encoder on JSONL tasks with contrastive loss.
   - `evaluate_arc.py` — Run the evaluation/ablation suite and emit JSON metrics.
 - `tests/` — Unit and integration tests covering generators, models, and envs.
@@ -30,7 +31,33 @@ and evaluate out-of-distribution reasoning.
 
 1. Create a Python environment (e.g., `python -m venv .venv && source .venv/bin/activate`).
 2. Install core dependencies (placeholder): `pip install -r requirements.txt`.
-3. Generate a sanity dataset once the generator is implemented: `python scripts/generate_dataset.py --config configs/data/pilot.yaml`.
+3. Generate synthetic datasets (pick a recipe below) and start pretraining.
+
+### Dataset recipes
+
+- **Baseline sequential mix** — `python scripts/generate_dataset.py --config configs/data/pilot.yaml`
+- **Curriculum (atomic + sequential)** — `python scripts/generate_dataset.py --config configs/data/pilot_curriculum.yaml`
+- **OOD slice (large grids, constrained primitives)** — `python scripts/generate_dataset.py --config configs/data/pilot_ood.yaml`
+
+Each config writes a manifest and `summary.json` to its `output_root`. The generator now accepts `task_schedule` at the config root (or under `generator`) and optional `generator.allowed_primitives` for structural constraints/outlier pockets.
+
+Evaluate a manifest to sanity-check solve rates and program counts:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/evaluate_arc.py --tasks data/pilot_curriculum/manifest.jsonl --output artifacts/eval/pilot_curriculum.json
+```
+
+### JEPA pretraining
+
+Run full JEPA training against any manifest:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/train_jepa.py --config configs/training/jepa_pretrain.yaml --device cpu
+```
+
+Pass `--device cuda` on GPU boxes. Checkpoints and `metrics.json` land in `artifacts/jepa/pretrain/` (configurable via `training.checkpoint_dir`). Use `--dry-run` for a single dummy optimisation step.
+
+For full A6000 runs, start from `configs/training/jepa_pretrain_gpu.yaml`; it sets a larger batch, longer schedule, and defaults to TensorBoard logging under `artifacts/jepa/pretrain_gpu/tensorboard/`.
 
 > This project is under active development. Consult the blueprint documents for
 > the full roadmap and open Beads issues for next steps.

@@ -5,9 +5,14 @@ from __future__ import annotations
 import argparse
 import random
 from pathlib import Path
+import sys
 from typing import Dict, List
 
 import yaml
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from arcgen import GeneratorConfig, SyntheticARCGenerator
 from envs import (

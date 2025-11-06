@@ -1,10 +1,11 @@
-# JEPA pretraining configuration (placeholder values)
+# JEPA pretraining configuration targeting A6000-class GPUs
 seed: 123
 dataset_manifest: data/pilot_curriculum/manifest.jsonl
 
 data:
-  context_window: 3  # number of sequential grids per sample (k)
-  target_offset: 1   # predict one step ahead
+  context_window: 3
+  target_offset: 1
+  shuffle: true
 
 tokenizer:
   max_objects: 16
@@ -29,22 +30,18 @@ model:
 
 optimizer:
   name: "adam"
-  lr: 1.0e-4
+  lr: 5.0e-5
   weight_decay: 1.0e-6
 
 training:
-  batch_size: 512
-  epochs: 10
-  checkpoint_dir: artifacts/jepa/pretrain
-  device: cpu
-
-logging:
-  enabled: true
-  log_dir: artifacts/jepa/pretrain/tensorboard
-  flush_secs: 15
+  batch_size: 1024
+  epochs: 30
+  checkpoint_dir: artifacts/jepa/pretrain_gpu
+  device: cuda
+  drop_last: true
 
 augmentations:
-  mask_ratio: 0.2
+  mask_ratio: 0.15
   random_crop_radius: 1
   palette_permutation: true
   gaussian_noise_std: 0.05
@@ -55,7 +52,13 @@ loss:
   temperature_init: 0.07
   temperature_bounds: [0.03, 0.3]
   learnable_temperature: true
-  queue_size: 4096
+  queue_size: 8192
   projection_dim: 256
   projection_layers: 2
   projection_activation: "relu"
+
+logging:
+  enabled: true
+  log_dir: artifacts/jepa/pretrain_gpu/tensorboard
+  flush_secs: 10
+  run_name: jepa_gpu

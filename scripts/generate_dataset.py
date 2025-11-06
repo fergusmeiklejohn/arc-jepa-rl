@@ -91,6 +91,27 @@ def build_generator_config(config: Mapping) -> GeneratorConfig:
     return cfg
 
 
+def extract_allowed_primitives(config: Mapping) -> Sequence[str] | None:
+    generator_cfg = config.get("generator", {})
+    if not isinstance(generator_cfg, Mapping):
+        return None
+
+    allowed = generator_cfg.get("allowed_primitives")
+    if allowed is None:
+        return None
+    if isinstance(allowed, (str, bytes)):
+        raise ValueError("allowed_primitives must be a sequence, not a string")
+    if not isinstance(allowed, Sequence):
+        raise ValueError("allowed_primitives must be a sequence of primitive names")
+
+    normalized: list[str] = []
+    for primitive in allowed:
+        if not isinstance(primitive, str):
+            raise ValueError("allowed_primitives entries must be strings")
+        normalized.append(primitive)
+    return tuple(normalized)
+
+
 def extract_schedule(config: Mapping) -> Dict[str, int]:
     if "task_schedule" in config:
         raw = config["task_schedule"]
@@ -98,11 +119,28 @@ def extract_schedule(config: Mapping) -> Dict[str, int]:
             raise ValueError("task_schedule must be a mapping of phase->count")
         return {normalise_phase(phase): int(count) for phase, count in raw.items()}
 
-    phase = config.get("curriculum_phase", "atomic")
-    count = int(config.get("generator", {}).get("samples", config.get("samples", 0)))
+    generator_cfg = config.get("generator", {})
+    if isinstance(generator_cfg, Mapping) and "task_schedule" in generator_cfg:
+        raw = generator_cfg["task_schedule"]
+        if not isinstance(raw, Mapping):
+            raise ValueError("generator.task_schedule must be a mapping of phase->count")
+        return {normalise_phase(phase): int(count) for phase, count in raw.items()}
+
+    phase = config.get("curriculum_phase")
+    if phase is None and isinstance(generator_cfg, Mapping):
+        phase = generator_cfg.get("curriculum_phase")
+    phase = normalise_phase(phase or "atomic")
+
+    samples = config.get("samples")
+    if samples is None and isinstance(generator_cfg, Mapping):
+        samples = generator_cfg.get("samples")
+    if samples is None:
+        raise ValueError("number of samples must be specified either at root or under generator")
+
+    count = int(samples)
     if count <= 0:
         raise ValueError("number of samples must be positive")
-    return {normalise_phase(phase): count}
+    return {phase: count}
 
 
 def parse_export_options(config: Mapping) -> ExportOptions:
@@ -126,7 +164,13 @@ def build_output_root(args: argparse.Namespace, config: Mapping) -> Path:
 
 
 def generate_tasks(config: Mapping) -> Sequence[SyntheticTask]:
-    generator = SyntheticARCGenerator(build_generator_config(config), seed=config.get("seed"))
+    generator_config = build_generator_config(config)
+    allowed_primitives = extract_allowed_primitives(config)
+    generator = SyntheticARCGenerator(
+        generator_config,
+        seed=config.get("seed"),
+        allowed_primitives=allowed_primitives,
+    )
     schedule = extract_schedule(config)
 
     tasks: list[SyntheticTask] = []

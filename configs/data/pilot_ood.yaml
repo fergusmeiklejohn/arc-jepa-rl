@@ -1,0 +1,29 @@
+# Out-of-distribution slice with larger grids and constrained primitives
+seed: 456
+output_root: data/pilot_ood
+
+task_schedule:
+  atomic: 800
+  sequential: 1200
+
+generator:
+  grid_size:
+    min: 12
+    max: 18
+  colors:
+    min: 6
+    max: 9
+  background_color: 0
+  fill_probability: 0.25
+  max_parameter_retries: 12
+  max_task_retries: 24
+  allowed_primitives:
+    - mirror_x
+    - mirror_y
+    - rotate90
+    - translate
+    - recolor
+
+export:
+  include_png: false
+  compress_json: true
