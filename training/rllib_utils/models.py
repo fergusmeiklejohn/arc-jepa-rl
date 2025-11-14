@@ -152,7 +152,7 @@ class ActorCriticCore(nn.Module):
             nn.init.zeros_(self.termination_head.bias)
 
 
-class _BaseRLLibActorCritic(TorchModelV2):
+class _BaseRLLibActorCritic(TorchModelV2, nn.Module):
     """Shared glue for RLlib Torch models."""
 
     def __init__(
@@ -164,8 +164,10 @@ class _BaseRLLibActorCritic(TorchModelV2):
         name: str,
         *,
         include_termination: bool,
+        **kwargs,
     ) -> None:
-        super().__init__(obs_space, action_space, num_outputs, model_config, name)
+        TorchModelV2.__init__(self, obs_space, action_space, num_outputs, model_config, name)
+        nn.Module.__init__(self)
         obs_dim = _infer_obs_dim(obs_space)
         action_dim = getattr(action_space, "n", num_outputs)
         cfg, custom_cfg = _build_config(model_config, include_termination=include_termination)
@@ -209,7 +211,12 @@ class _BaseRLLibActorCritic(TorchModelV2):
         if not path.exists():
             raise FileNotFoundError(f"Pretrained weights not found: {path}")
         state = torch.load(path, map_location="cpu")
-        missing, unexpected = self.core.load_state_dict(state, strict=False)
+        current = self.core.state_dict()
+        compatible = {}
+        for key, value in state.items():
+            if key in current and current[key].shape == value.shape:
+                compatible[key] = value
+        missing, unexpected = self.core.load_state_dict(compatible, strict=False)
         if unexpected:
             raise RuntimeError(f"Unexpected keys in pretrained weights: {unexpected}")
         if missing:
@@ -219,28 +226,32 @@ class _BaseRLLibActorCritic(TorchModelV2):
 class OptionActorCriticModel(_BaseRLLibActorCritic):
     """Custom RLlib model for option-level policies with termination head."""
 
-    def __init__(self, obs_space, action_space, num_outputs, model_config, name):
+    def __init__(self, obs_space, action_space, num_outputs, model_config, name, **kwargs):
+        include_term = kwargs.pop("include_termination", True)
         super().__init__(
             obs_space,
             action_space,
             num_outputs,
             model_config,
             name,
-            include_termination=True,
+            include_termination=include_term,
+            **kwargs,
         )
 
 
 class ManagerActorCriticModel(_BaseRLLibActorCritic):
     """Custom RLlib model for high-level option selection."""
 
-    def __init__(self, obs_space, action_space, num_outputs, model_config, name):
+    def __init__(self, obs_space, action_space, num_outputs, model_config, name, **kwargs):
+        include_term = kwargs.pop("include_termination", False)
         super().__init__(
             obs_space,
             action_space,
             num_outputs,
             model_config,
             name,
-            include_termination=False,
+            include_termination=include_term,
+            **kwargs,
         )
 
 

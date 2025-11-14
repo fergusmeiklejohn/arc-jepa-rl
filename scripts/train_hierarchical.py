@@ -16,15 +16,15 @@ from training.rllib_utils import LatentOptionRLLibEnv, register_hierarchical_mod
 
 try:  # pragma: no cover - optional heavy dependency
     import ray
-    from ray.rllib.algorithms.a3c import A3CConfig
     from ray.rllib.algorithms.ppo import PPOConfig
+    from ray.rllib.algorithms.appo import APPOConfig
     from ray.tune.registry import register_env
 
     RLLIB_AVAILABLE = True
 except Exception:  # pragma: no cover
     ray = None
     PPOConfig = None
-    A3CConfig = None
+    APPOConfig = None
     register_env = None
     RLLIB_AVAILABLE = False
 
@@ -71,39 +71,48 @@ def prepare_env_config(config: Dict[str, Any], config_dir: Path) -> Dict[str, An
 
 def build_algorithm_config(env_name: str, env_config: Dict[str, Any], trainer_cfg: Dict[str, Any]):
     algorithm = str(trainer_cfg.get("algorithm", "ppo")).lower()
-    if algorithm == "ppo":
-        if PPOConfig is None:
-            raise RuntimeError("PPOConfig is unavailable; install ray[rllib]")
-        config = PPOConfig()
-    elif algorithm in {"a2c", "a3c"}:
-        if "A3CConfig" not in globals() or A3CConfig is None:
-            raise RuntimeError("A3CConfig is unavailable; install ray[rllib]")
-        config = A3CConfig()
-    else:
-        raise ValueError(f"Unsupported trainer.algorithm '{algorithm}'")
+    algo_map = {}
+    if PPOConfig is not None:
+        algo_map["ppo"] = PPOConfig
+    if APPOConfig is not None:
+        algo_map["appo"] = APPOConfig
 
+    config_cls = algo_map.get(algorithm)
+    if config_cls is None:
+        raise ValueError(
+            f"Unsupported or unavailable trainer.algorithm '{algorithm}'."
+        )
+    config = config_cls()
+
+    config = config.api_stack(
+        enable_rl_module_and_learner=False,
+        enable_env_runner_and_connector_v2=False,
+    )
     config = config.environment(env=env_name, env_config=env_config)
     rollout_cfg = trainer_cfg.get("rollouts", {})
-    config = config.rollouts(
-        num_rollout_workers=int(trainer_cfg.get("num_workers", 0)),
-        rollout_fragment_length=int(rollout_cfg.get("fragment_length", trainer_cfg.get("rollout_fragment_length", 64))),
+    num_workers = int(trainer_cfg.get("num_workers", rollout_cfg.get("num_env_runners", 0)))
+    fragment_length = int(rollout_cfg.get("fragment_length", trainer_cfg.get("rollout_fragment_length", 64)))
+    num_envs_per_worker = int(rollout_cfg.get("num_envs_per_worker", 1))
+    config = config.env_runners(
+        num_env_runners=num_workers,
+        num_envs_per_env_runner=num_envs_per_worker,
+        rollout_fragment_length=fragment_length,
     )
     config = config.resources(num_gpus=float(trainer_cfg.get("num_gpus", 0)))
     config = config.framework(str(trainer_cfg.get("framework", "torch")))
     lr = float(trainer_cfg.get("lr", 3e-4))
+    train_batch_size = int(trainer_cfg.get("train_batch_size", 256))
     if algorithm == "ppo":
         config = config.training(
-            train_batch_size=int(trainer_cfg.get("train_batch_size", 256)),
-            sgd_minibatch_size=int(trainer_cfg.get("sgd_minibatch_size", 64)),
-            num_sgd_iter=int(trainer_cfg.get("num_sgd_iter", 4)),
+            train_batch_size=train_batch_size,
             lr=lr,
         )
-    else:
+    elif algorithm == "appo":
         config = config.training(
             lr=lr,
-            use_critic=bool(trainer_cfg.get("use_critic", True)),
-            use_gae=bool(trainer_cfg.get("use_gae", True)),
-            grad_clip=float(trainer_cfg.get("grad_clip", 40.0)),
+            train_batch_size=train_batch_size,
+            use_kl_loss=bool(trainer_cfg.get("use_kl_loss", False)),
+            kl_coeff=float(trainer_cfg.get("kl_coeff", 0.5)),
         )
     model_cfg = trainer_cfg.get("model")
     if model_cfg:

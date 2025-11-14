@@ -1,6 +1,6 @@
 # Sample A2C configuration that reuses BC weights for initialization.
 
-jepa_config_path: configs/training/jepa_pretrain.yaml
+jepa_config_path: ../jepa_pretrain.yaml
 device: cpu
 
 env:
@@ -28,14 +28,14 @@ env:
     sequential: 1
 
 trainer:
-  algorithm: a2c
-  num_workers: 0
+  algorithm: appo
+  num_workers: 1
   rollout_fragment_length: 32
   lr: 0.0005
   framework: torch
-  use_critic: true
-  use_gae: true
-  grad_clip: 40.0
+  train_batch_size: 256
+  use_kl_loss: true
+  kl_coeff: 0.5
   model:
     custom_model: arc_option_actor_critic
     custom_model_config:

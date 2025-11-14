@@ -1,6 +1,6 @@
 # Sample PPO configuration for training option policies with RLlib.
 
-jepa_config_path: configs/training/jepa_pretrain.yaml
+jepa_config_path: ../jepa_pretrain.yaml
 device: cpu
 
 env:
