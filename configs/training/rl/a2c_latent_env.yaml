@@ -1,0 +1,49 @@
+# Sample A2C configuration that reuses BC weights for initialization.
+
+jepa_config_path: configs/training/jepa_pretrain.yaml
+device: cpu
+
+env:
+  max_steps: 8
+  terminate_on_exact_match: true
+  reward:
+    success_threshold: 0.05
+    success_bonus: 1.0
+    step_penalty: 0.05
+    invalid_penalty: 0.1
+    distance_scale: 1.0
+    metric: cosine
+  options:
+    include_defaults: true
+    extra: []
+  generator:
+    min_grid_size: 5
+    max_grid_size: 8
+    min_colors: 3
+    max_colors: 6
+    background_color: 0
+    fill_probability: 0.75
+  task_schedule:
+    atomic: 1
+    sequential: 1
+
+trainer:
+  algorithm: a2c
+  num_workers: 0
+  rollout_fragment_length: 32
+  lr: 0.0005
+  framework: torch
+  use_critic: true
+  use_gae: true
+  grad_clip: 40.0
+  model:
+    custom_model: arc_option_actor_critic
+    custom_model_config:
+      hidden_dims: [128, 128]
+      activation: relu
+      layer_norm: true
+      include_termination: true
+      action_mask_key: null
+      pretrained_weights: artifacts/bc/bc_model_best.pt
+  stop:
+    training_iteration: 2

@@ -1,0 +1,28 @@
+# Environment-only configuration for rollout trace generation.
+
+max_steps: 8
+seed: 13
+
+reward:
+  success_threshold: 0.05
+  success_bonus: 1.0
+  step_penalty: 0.05
+  invalid_penalty: 0.1
+  distance_scale: 1.0
+  metric: cosine
+
+options:
+  include_defaults: true
+  extra: []
+
+generator:
+  min_grid_size: 5
+  max_grid_size: 8
+  min_colors: 3
+  max_colors: 6
+  background_color: 0
+  fill_probability: 0.75
+
+task_schedule:
+  atomic: 1
+  sequential: 1

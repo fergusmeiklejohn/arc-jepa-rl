@@ -74,23 +74,17 @@ bd automatically syncs with git:
 
 - Create the project virtualenv with `uv venv --python 3.11 .venv`.
 - Activate via `source .venv/bin/activate` (or the platform equivalent) before running commands.
-- Install dependencies with `uv pip install --python .venv/bin/python <package>`. Current baseline:
-  - `torch`
-  - `pyyaml`
-  - `numpy`
-  - `pytest`
-- Update this list when the dependency set changes so teammates can reproduce the environment.
+- Install dependencies with `uv pip install --python .venv/bin/python -r requirements.txt`.
+- Add `requirements-dev.txt` for tests and `requirements-rl.txt` when working on RLlib training.
+- See `docs/DEPENDENCIES.md` for the authoritative dependency list and update process.
 
 ### Python Environment (uv)
 
 - Create the project virtualenv with `uv venv --python 3.11 .venv`.
 - Activate via `source .venv/bin/activate` (or the platform equivalent) before running commands.
-- Install dependencies with `uv pip install --python .venv/bin/python <package>`. Current baseline:
-  - `torch`
-  - `pyyaml`
-  - `numpy`
-  - `pytest`
-- Update this list when the dependency set changes so teammates can reproduce the environment.
+- Install dependencies with `uv pip install --python .venv/bin/python -r requirements.txt`.
+- Add `requirements-dev.txt` for tests and `requirements-rl.txt` when working on RLlib training.
+- See `docs/DEPENDENCIES.md` for the authoritative dependency list and update process.
 
 ### MCP Server (Recommended)
 
@@ -146,7 +140,7 @@ Benefits:
 
 ### Local Development (MacBook Pro M3 Max, 36GB RAM)
 - Use `uv` to manage Python: `uv venv --python 3.11 .venv` then `source .venv/bin/activate`.
-- Install deps with `uv pip install --python .venv/bin/python torch pyyaml numpy pytest`.
+- Install deps with `uv pip install --python .venv/bin/python -r requirements.txt` (+ `requirements-dev.txt` when running tests, `requirements-rl.txt` for RLlib work).
 - What to run locally (fast iteration):
   - Unit/integration tests: `.venv/bin/pytest` (target is green).
   - Small synthetic datasets and sanity checks: `python scripts/generate_dataset.py ...`.
@@ -161,7 +155,7 @@ Notes: CPU PyTorch is fine for smoke tests; keep epochs small and batch sizes mi
 - Intended for larger JEPA/guidance/meta-JEPA training runs and heavy evaluations.
 - Process:
   1) Push code to GitHub from local.
-  2) On Paperspace, pull latest (`git pull`), create env (`uv venv --python 3.11 .venv`), and install deps with `uv`.
+  2) On Paperspace, pull latest (`git pull`), create env (`uv venv --python 3.11 .venv`), and install deps with `uv pip install --python .venv/bin/python -r requirements.txt` (plus extras as needed).
   3) Run training scripts with GPU-enabled PyTorch; use curated configs.
   4) Persist artifacts (weights, JSON reports) back to repo or external storage as appropriate.
 

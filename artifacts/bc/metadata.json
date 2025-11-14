@@ -1,0 +1,33 @@
+{
+  "feature_dim": 129,
+  "action_dim": 9,
+  "option_id_map": {
+    "8": "translate[dx=0, dy=1, fill=0]",
+    "3": "rotate90[k=2]",
+    "4": "rotate90[k=3]",
+    "6": "translate[dx=1, dy=0, fill=0]",
+    "2": "rotate90[k=1]",
+    "1": "mirror_y",
+    "7": "translate[dx=0, dy=-1, fill=0]",
+    "0": "mirror_x",
+    "5": "translate[dx=-1, dy=0, fill=0]"
+  },
+  "model_config": {
+    "hidden_dims": [
+      256,
+      256
+    ],
+    "activation": "relu",
+    "layer_norm": true,
+    "dropout": 0.0,
+    "include_termination": true
+  },
+  "training": {
+    "batch_size": 64,
+    "epochs": 5,
+    "lr": 0.001,
+    "weight_decay": 0.0,
+    "termination_loss_weight": 1.0,
+    "device": "cpu"
+  }
+}

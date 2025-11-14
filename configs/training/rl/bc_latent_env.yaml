@@ -1,0 +1,22 @@
+# Sample configuration for behavioral cloning pretraining.
+
+dataset:
+  path: data/latent_option_traces.jsonl
+  val_ratio: 0.2
+  seed: 7
+  max_steps: null
+
+model:
+  hidden_dims: [256, 256]
+  activation: relu
+  layer_norm: true
+  dropout: 0.0
+  include_termination: true
+
+training:
+  batch_size: 64
+  epochs: 5
+  lr: 0.001
+  weight_decay: 0.0
+  termination_loss_weight: 1.0
+  device: cpu

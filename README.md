@@ -24,6 +24,7 @@ and evaluate out-of-distribution reasoning.
   - `generate_dataset.py` — Build synthetic manifests; supports curriculum schedules and `allowed_primitives` constraints.
   - `train_jepa.py` — Run manifest-backed JEPA pretraining (supports `--dry-run` and `--device`).
   - `train_meta_jepa.py` — Train the rule-family encoder on JSONL tasks with contrastive loss.
+  - `train_hierarchical.py` — Launch RLlib PPO over the latent option environment using configs under `configs/training/rl/`.
   - `evaluate_arc.py` — Run the evaluation/ablation suite and emit JSON metrics.
 - `tests/` — Unit and integration tests covering generators, models, and envs.
 
@@ -59,8 +60,34 @@ Pass `--device cuda` on GPU boxes. Checkpoints and `metrics.json` land in `artif
 
 For full A6000 runs, start from `configs/training/jepa_pretrain_gpu.yaml`; it sets a larger batch, longer schedule, and defaults to TensorBoard logging under `artifacts/jepa/pretrain_gpu/tensorboard/`.
 
+### Hierarchical option training (RLlib)
+
+The RL stack uses RLlib. Install the optional dependency first:
+
+```bash
+pip install "ray[rllib]"
+```
+
+Then launch PPO on the latent option environment:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/train_hierarchical.py \
+  --config configs/training/rl/ppo_latent_env.yaml \
+  --output-dir artifacts/rl/ppo_run --stop-iters 2
+```
+
+The sample config wires RLlib into `ArcLatentOptionEnv`, loads JEPA encoder settings via `jepa_config_path`, and exposes knobs for reward shaping, curriculum schedules, and PPO hyper-parameters. Metrics plus the final checkpoint path are stored under the chosen output directory.
+
 > This project is under active development. Consult the blueprint documents for
 > the full roadmap and open Beads issues for next steps.
+
+## Dependencies
+
+- Python deps are tracked via `requirements*.txt` files in the repo root. Use `uv venv --python 3.11 .venv` followed by `uv pip install --python .venv/bin/python -r requirements.txt`.
+- Install optional extras as needed:
+  - `requirements-dev.txt` for test tooling (`pytest`).
+  - `requirements-rl.txt` for RLlib-based PPO/A2C training.
+- See `docs/DEPENDENCIES.md` for the full process, package descriptions, and contribution guidelines.
 
 ## Decision Records
 

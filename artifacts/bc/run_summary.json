@@ -1,0 +1,63 @@
+{
+  "history": [
+    {
+      "epoch": 1,
+      "train_loss": 2.889435291290283,
+      "train_action_loss": 2.1961779594421387,
+      "train_termination_loss": 0.6932572722434998,
+      "train_accuracy": 0.125,
+      "val_loss": 2.8289613723754883,
+      "val_action_loss": 2.1544013023376465,
+      "val_termination_loss": 0.6745601296424866,
+      "val_accuracy": 0.14285714285714285
+    },
+    {
+      "epoch": 2,
+      "train_loss": 2.8066580295562744,
+      "train_action_loss": 2.126617193222046,
+      "train_termination_loss": 0.6800408363342285,
+      "train_accuracy": 0.40625,
+      "val_loss": 2.781484365463257,
+      "val_action_loss": 2.124802827835083,
+      "val_termination_loss": 0.656681478023529,
+      "val_accuracy": 0.14285714285714285
+    },
+    {
+      "epoch": 3,
+      "train_loss": 2.7260217666625977,
+      "train_action_loss": 2.060910940170288,
+      "train_termination_loss": 0.66511070728302,
+      "train_accuracy": 0.5,
+      "val_loss": 2.741969347000122,
+      "val_action_loss": 2.105149269104004,
+      "val_termination_loss": 0.6368201375007629,
+      "val_accuracy": 0.14285714285714285
+    },
+    {
+      "epoch": 4,
+      "train_loss": 2.6437973976135254,
+      "train_action_loss": 1.9971262216567993,
+      "train_termination_loss": 0.6466712355613708,
+      "train_accuracy": 0.53125,
+      "val_loss": 2.7108006477355957,
+      "val_action_loss": 2.0953381061553955,
+      "val_termination_loss": 0.6154624223709106,
+      "val_accuracy": 0.14285714285714285
+    },
+    {
+      "epoch": 5,
+      "train_loss": 2.5583672523498535,
+      "train_action_loss": 1.9342201948165894,
+      "train_termination_loss": 0.6241470575332642,
+      "train_accuracy": 0.53125,
+      "val_loss": 2.687814712524414,
+      "val_action_loss": 2.0948071479797363,
+      "val_termination_loss": 0.5930075645446777,
+      "val_accuracy": 0.14285714285714285
+    }
+  ],
+  "best_model": "artifacts/bc/bc_model_best.pt",
+  "latest_model": "artifacts/bc/bc_model_last.pt",
+  "metrics_path": "artifacts/bc/metrics.json",
+  "metadata_path": "artifacts/bc/metadata.json"
+}
