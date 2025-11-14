@@ -13,12 +13,27 @@ from arcgen import Grid
 
 @dataclass(frozen=True)
 class GridPairBatch:
-    context: Sequence[Grid]
+    """Batch of temporal context sequences paired with targets."""
+
+    context: Sequence[Sequence[Grid]]
     target: Sequence[Grid]
 
     def __post_init__(self) -> None:
         if len(self.context) != len(self.target):
             raise ValueError("context and target sequences must have the same length")
+        if not self.context:
+            raise ValueError("context must contain at least one sequence")
+        context_lengths = {len(sequence) for sequence in self.context}
+        if not context_lengths:
+            raise ValueError("context sequences must not be empty")
+        if len(context_lengths) != 1:
+            raise ValueError("all context sequences must have the same length")
+        if 0 in context_lengths:
+            raise ValueError("context sequences must have positive length")
+
+    @property
+    def context_length(self) -> int:
+        return len(self.context[0])
 
 
 @dataclass(frozen=True)
@@ -82,7 +97,7 @@ class ManifestExample:
     context: Grid
     target: Grid
     metadata: Mapping[str, object] | None = None
-    context_sequence: Sequence[Grid] | None = None
+    context_sequence: Tuple[Grid, ...] = ()
 
 
 def _is_grid_like(value: object) -> bool:
@@ -136,6 +151,22 @@ def _normalize_target(value: object) -> Grid:
     raise ValueError("target must be a grid or sequence containing a grid")
 
 
+def _ensure_context_window(sequence: Sequence[Grid], *, required_length: int) -> Tuple[Grid, ...]:
+    if required_length <= 0:
+        raise ValueError("required_length must be positive")
+    normalized = tuple(sequence)
+    if not normalized:
+        raise ValueError("context sequence must contain at least one grid")
+    if len(normalized) == required_length:
+        return normalized
+    if len(normalized) > required_length:
+        return normalized[-required_length:]
+    # Pad by repeating the last available grid.
+    last = normalized[-1]
+    padding = tuple(last for _ in range(required_length - len(normalized)))
+    return normalized + padding
+
+
 def _merge_metadata(base: Mapping[str, object] | None, extra: Mapping[str, object]) -> Mapping[str, object]:
     if base is None:
         return dict(extra)
@@ -154,7 +185,10 @@ def _examples_from_record(
     base_meta = metadata if isinstance(metadata, Mapping) else None
 
     if "context" in data and "target" in data:
-        context_sequence = _normalize_context(data["context"])
+        context_sequence = _ensure_context_window(
+            _normalize_context(data["context"]),
+            required_length=context_window,
+        )
         target_grid = _normalize_target(data["target"])
         yield ManifestExample(
             context=context_sequence[-1],
@@ -171,7 +205,10 @@ def _examples_from_record(
             context=context_grid,
             target=target_grid,
             metadata=base_meta,
-            context_sequence=(context_grid,),
+            context_sequence=_ensure_context_window(
+                (context_grid,),
+                required_length=context_window,
+            ),
         )
         return
 
@@ -195,11 +232,12 @@ def _examples_from_record(
                 "context_indices": list(range(start, start + context_window)),
                 "target_index": target_index,
             }
+            context_sequence = tuple(context_slice)
             yield ManifestExample(
                 context=context_slice[-1],
                 target=target_grid,
                 metadata=_merge_metadata(base_meta, extra_meta),
-                context_sequence=context_slice,
+                context_sequence=context_sequence,
             )
         return
 
@@ -294,11 +332,13 @@ def _augment_grid(grid: Grid, config: AugmentationConfig, rng: random.Random) ->
 class InMemoryGridPairDataset:
     """Minimal iterable dataset backed by in-memory grid pairs."""
 
-    def __init__(self, pairs: Iterable[Tuple[Sequence[Grid], Sequence[Grid]]]) -> None:
-        self._pairs: List[Tuple[Sequence[Grid], Sequence[Grid]]] = [(
-            tuple(context),
-            tuple(target),
-        ) for context, target in pairs]
+    def __init__(self, pairs: Iterable[Tuple[Sequence[Sequence[Grid]], Sequence[Grid]]]) -> None:
+        processed_pairs: List[Tuple[Tuple[Tuple[Grid, ...], ...], Tuple[Grid, ...]]] = []
+        for context_batch, target_batch in pairs:
+            context_sequences = tuple(tuple(sequence) for sequence in context_batch)
+            target_sequence = tuple(target_batch)
+            processed_pairs.append((context_sequences, target_sequence))
+        self._pairs = processed_pairs
 
     def __len__(self) -> int:
         return len(self._pairs)
@@ -316,7 +356,7 @@ class ManifestGridPairDataset:
         manifest_path: str | Path,
         *,
         batch_size: int,
-        context_window: int = 1,
+        context_window: int = 3,
         target_offset: int = 1,
         shuffle: bool = True,
         drop_last: bool = False,
@@ -398,12 +438,15 @@ class ManifestGridPairDataset:
         if self.shuffle:
             rng.shuffle(indices)
 
-        batch_context: List[Grid] = []
+        batch_context: List[Tuple[Grid, ...]] = []
         batch_target: List[Grid] = []
 
         for idx in indices:
             example = self._examples[idx]
-            batch_context.append(self._apply_augmentations(example.context, rng))
+            if not example.context_sequence:
+                raise ValueError("manifest example is missing temporal context")
+            augmented_sequence = self._augment_context_sequence(example.context_sequence, rng)
+            batch_context.append(augmented_sequence)
             batch_target.append(self._apply_augmentations(example.target, rng))
 
             if len(batch_context) == self.batch_size:
@@ -417,8 +460,16 @@ class ManifestGridPairDataset:
     def _apply_augmentations(self, grid: Grid, rng: random.Random) -> Grid:
         return _augment_grid(grid, self.augmentations, rng)
 
+    def _augment_context_sequence(
+        self,
+        sequence: Sequence[Grid],
+        rng: random.Random,
+    ) -> Tuple[Grid, ...]:
+        return tuple(self._apply_augmentations(grid, rng) for grid in sequence)
 
-def build_dummy_dataset(num_batches: int = 4) -> InMemoryGridPairDataset:
+
+def build_dummy_dataset(num_batches: int = 4, context_length: int = 3) -> InMemoryGridPairDataset:
     grid = Grid([[0, 1], [0, 1]])
-    pairs = [([grid, grid], [grid, grid]) for _ in range(num_batches)]
+    context_sequence = tuple(grid for _ in range(context_length))
+    pairs = [([context_sequence, context_sequence], [grid, grid]) for _ in range(num_batches)]
     return InMemoryGridPairDataset(pairs)

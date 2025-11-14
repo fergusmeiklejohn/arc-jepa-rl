@@ -86,6 +86,15 @@ class ObjectCentricJEPAExperiment:
 
         self.config = config
         self.device = torch.device(device) if device is not None else torch.device("cpu")
+        data_cfg = config.get("data", {})
+        if isinstance(data_cfg, Mapping):
+            context_length_value = data_cfg.get("context_length", data_cfg.get("context_window", 3))
+        else:
+            context_length_value = 3
+        self.context_length = int(context_length_value)
+        if self.context_length <= 0:
+            raise ValueError("context length must be positive")
+
         self.trainer = ObjectCentricJEPATrainer(config)
         self.trainer.encoder.to(self.device)
 
@@ -130,22 +139,40 @@ class ObjectCentricJEPAExperiment:
             weight_decay=opt_cfg.weight_decay,
         )
 
-    def encode_batch(
-        self,
-        context_grids: Sequence[Grid],
-        target_grids: Sequence[Grid],
-    ):
-        return self.trainer.encode_batch(
-            context_grids,
-            target_grids,
-            device=self.device,
-        )
-
     def _masked_mean(self, embeddings: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         mask = mask.unsqueeze(-1)
         summed = (embeddings * mask).sum(dim=1)
         counts = torch.clamp(mask.sum(dim=1), min=1.0)
         return summed / counts
+
+    def _context_length_from_sequences(self, context_sequences: Sequence[Sequence[Grid]]) -> int:
+        if not context_sequences:
+            raise ValueError("context_sequences must contain at least one entry")
+        lengths = {len(sequence) for sequence in context_sequences}
+        if len(lengths) != 1:
+            raise ValueError("all context sequences must have the same length")
+        context_length = lengths.pop()
+        if context_length != self.context_length:
+            raise ValueError(
+                f"context length mismatch: expected {self.context_length}, received {context_length}",
+            )
+        if context_length <= 0:
+            raise ValueError("context sequences must have positive length")
+        return context_length
+
+    def _encode_context_sequences(
+        self,
+        context_sequences: Sequence[Sequence[Grid]],
+    ) -> torch.Tensor:
+        context_length = self._context_length_from_sequences(context_sequences)
+        batch_size = len(context_sequences)
+        flat_context: list[Grid] = [
+            grid for sequence in context_sequences for grid in sequence
+        ]
+        encoding = self.trainer.object_encoder.encode(flat_context, device=self.device)
+        per_grid_repr = self._masked_mean(encoding.embeddings, encoding.mask.to(self.device))
+        reshaped = per_grid_repr.view(batch_size, context_length, -1)
+        return reshaped.mean(dim=1)
 
     def _info_nce_loss(self, context_proj: torch.Tensor, target_proj: torch.Tensor) -> torch.Tensor:
         if self.loss_config.learnable_temperature:
@@ -180,18 +207,15 @@ class ObjectCentricJEPAExperiment:
 
     def train_step(
         self,
-        context_grids: Sequence[Grid],
+        context_sequences: Sequence[Sequence[Grid]],
         target_grids: Sequence[Grid],
     ) -> TrainStepResult:
-        batch = self.encode_batch(context_grids, target_grids)
+        if not target_grids:
+            raise ValueError("target_grids must contain at least one entry")
 
-        embeddings_context = batch.context.embeddings
-        embeddings_target = batch.target.embeddings
-        mask_context = batch.context.mask.to(self.device)
-        mask_target = batch.target.mask.to(self.device)
-
-        context_repr = self._masked_mean(embeddings_context, mask_context)
-        target_repr = self._masked_mean(embeddings_target, mask_target)
+        context_repr = self._encode_context_sequences(context_sequences)
+        target_encoding = self.trainer.object_encoder.encode(target_grids, device=self.device)
+        target_repr = self._masked_mean(target_encoding.embeddings, target_encoding.mask.to(self.device))
 
         context_proj = self.projection_head(context_repr)
         target_proj = self.projection_head(target_repr)
@@ -207,8 +231,8 @@ class ObjectCentricJEPAExperiment:
 
         return TrainStepResult(
             loss=float(loss.detach().cpu().item()),
-            encoded_context=embeddings_context.detach().cpu(),
-            encoded_target=embeddings_target.detach().cpu(),
+            encoded_context=context_repr.detach().cpu(),
+            encoded_target=target_repr.detach().cpu(),
         )
 
     def train_epoch(

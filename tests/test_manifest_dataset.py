@@ -53,7 +53,10 @@ def test_manifest_dataset_batches_context_target(tmp_path):
     assert isinstance(batch, GridPairBatch)
     assert len(batch.context) == 2
     assert len(batch.target) == 2
-    assert all(isinstance(item, Grid) for item in batch.context)
+    assert batch.context_length == 3
+    assert all(isinstance(sequence, tuple) for sequence in batch.context)
+    assert all(len(sequence) == batch.context_length for sequence in batch.context)
+    assert all(isinstance(item, Grid) for sequence in batch.context for item in sequence)
     assert all(isinstance(item, Grid) for item in batch.target)
 
 
@@ -89,8 +92,9 @@ def test_manifest_dataset_supports_frame_windowing(tmp_path):
     batches = list(dataset)
 
     assert len(batches) == 2
+    assert batches[0].context_length == 2
     # contexts should correspond to the second and third frames in the sequence
-    context_values = [batch.context[0].cells[1][1] for batch in batches]
+    context_values = [batch.context[0][-1].cells[1][1] for batch in batches]
     assert context_values == [2, 3]
     target_values = [batch.target[0].cells[1][1] for batch in batches]
     assert target_values == [3, 4]
@@ -130,5 +134,10 @@ def test_manifest_dataset_applies_masking_augmentation(tmp_path):
     )
 
     batch = next(iter(dataset))
-    masked_context = batch.context[0]
-    assert all(value == 0 for row in masked_context.cells for value in row)
+    masked_context_sequence = batch.context[0]
+    assert all(
+        value == 0
+        for grid in masked_context_sequence
+        for row in grid.cells
+        for value in row
+    )

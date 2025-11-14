@@ -53,10 +53,14 @@ def _build_dataset(config: dict, manifest_path: Path) -> ManifestGridPairDataset
     drop_last = bool(data_cfg.get("drop_last", False) or training_cfg.get("drop_last", False))
     dataset_seed = data_cfg.get("seed", config.get("seed"))
 
+    context_window = int(data_cfg.get("context_window", data_cfg.get("context_length", 3)))
+    if context_window <= 0:
+        raise ValueError("data.context_window must be positive")
+
     return ManifestGridPairDataset(
         manifest_path,
         batch_size=batch_size,
-        context_window=int(data_cfg.get("context_window", 1)),
+        context_window=context_window,
         target_offset=int(data_cfg.get("target_offset", 1)),
         shuffle=shuffle,
         drop_last=drop_last,
@@ -78,7 +82,8 @@ def main() -> None:
 
     if args.dry_run:
         grid = Grid([[0, 1], [0, 1]])
-        result = experiment.train_step([grid], [grid])
+        context_sequence = tuple(grid for _ in range(experiment.context_length))
+        result = experiment.train_step([context_sequence], [grid])
         print(f"Dry-run loss: {result.loss:.6f}")
         return
 
