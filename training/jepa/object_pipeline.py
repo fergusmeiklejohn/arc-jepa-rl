@@ -54,6 +54,9 @@ class ObjectEncoderConfig:
     num_embeddings: int | None = 512
     commitment_cost: float = 0.25
     ema_decay: float | None = 0.99
+    vq_refresh_enabled: bool = False
+    vq_refresh_interval: int = 100
+    vq_refresh_usage_threshold: float = 1e-3
     activation: str = "gelu"
     relational: bool = True
     relational_layers: int = 2
@@ -69,6 +72,11 @@ class ObjectEncoderConfig:
             num_embeddings=data.get("num_embeddings", cls.num_embeddings),
             commitment_cost=float(data.get("commitment_cost", cls.commitment_cost)),
             ema_decay=data.get("ema_decay", cls.ema_decay),
+            vq_refresh_enabled=bool(data.get("vq_refresh_enabled", cls.vq_refresh_enabled)),
+            vq_refresh_interval=int(data.get("vq_refresh_interval", cls.vq_refresh_interval)),
+            vq_refresh_usage_threshold=float(
+                data.get("vq_refresh_usage_threshold", cls.vq_refresh_usage_threshold)
+            ),
             activation=str(data.get("activation", cls.activation)),
             relational=bool(data.get("relational", cls.relational)),
             relational_layers=int(data.get("relational_layers", cls.relational_layers)),
@@ -203,6 +211,9 @@ def build_object_encoder(
         num_embeddings=encoder_cfg.num_embeddings,
         commitment_cost=encoder_cfg.commitment_cost,
         ema_decay=encoder_cfg.ema_decay,
+        vq_refresh_enabled=encoder_cfg.vq_refresh_enabled,
+        vq_refresh_interval=encoder_cfg.vq_refresh_interval,
+        vq_refresh_usage_threshold=encoder_cfg.vq_refresh_usage_threshold,
         activation=encoder_cfg.activation,
         relational=encoder_cfg.relational,
         relational_layers=encoder_cfg.relational_layers,

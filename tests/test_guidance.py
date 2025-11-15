@@ -14,6 +14,10 @@ from training.dsl import (
     ProgramEnumerator,
     ProgramInterpreter,
     Grid as GridType,
+    Primitive,
+    PrimitiveRegistry,
+    Expression,
+    Program,
 )
 
 
@@ -24,6 +28,48 @@ def dummy_latent_embedder(grid: Grid) -> torch.Tensor:
     if torch.all(flat == 0):
         return flat + 1e-6
     return torch.nn.functional.normalize(flat, dim=0)
+
+
+def _build_identity_registry():
+    registry = PrimitiveRegistry()
+    identity = Primitive(
+        name="identity_grid",
+        input_types=(GridType,),
+        output_type=GridType,
+        implementation=lambda grid: grid,
+    )
+    registry.register(identity)
+    return registry, identity
+
+
+def test_program_encoder_outputs_expected_shape():
+    torch.manual_seed(0)
+    registry, identity = _build_identity_registry()
+    var = InputVar("grid", GridType)
+    var_expr = Expression(type=GridType, var=var)
+    program = Program(Expression(type=GridType, primitive=identity, args=(var_expr,)))
+    encoder = ProgramEncoder(registry, embedding_dim=16)
+
+    encoding = encoder(program)
+
+    assert tuple(encoding.shape) == (16,)
+
+
+def test_program_encoder_distinguishes_tree_structure():
+    torch.manual_seed(0)
+    registry, identity = _build_identity_registry()
+    var = InputVar("grid", GridType)
+    var_expr = Expression(type=GridType, var=var)
+    shallow_expr = Expression(type=GridType, primitive=identity, args=(var_expr,))
+    deep_expr = Expression(type=GridType, primitive=identity, args=(shallow_expr,))
+    shallow_program = Program(shallow_expr)
+    deep_program = Program(deep_expr)
+    encoder = ProgramEncoder(registry, embedding_dim=16)
+
+    shallow_encoding = encoder(shallow_program)
+    deep_encoding = encoder(deep_program)
+
+    assert not torch.allclose(shallow_encoding, deep_encoding)
 
 
 def test_guidance_dataset_builds_examples():

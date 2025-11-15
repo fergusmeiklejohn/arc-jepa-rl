@@ -34,3 +34,38 @@ def test_vector_quantizer_ema_updates_embedding():
 
     updated_weight = vq.embedding.weight.detach().clone()
     assert not torch.allclose(initial_weight, updated_weight)
+
+
+def test_vector_quantizer_refresh_revives_unused_codes():
+    torch.manual_seed(0)
+    vq = VectorQuantizer(
+        num_embeddings=3,
+        embedding_dim=2,
+        ema_decay=0.9,
+        refresh_unused_codes=True,
+        refresh_interval=1,
+        refresh_usage_threshold=0.2,
+    )
+    vq.train()
+
+    with torch.no_grad():
+        weights = torch.tensor(
+            [
+                [0.0, 0.0],
+                [10.0, 10.0],
+                [20.0, 20.0],
+            ],
+            dtype=torch.float32,
+        )
+        vq.embedding.weight.copy_(weights)
+        vq._ema_w.copy_(weights)
+
+    cluster_a = torch.randn(8, 2, dtype=torch.float32) * 0.05
+    cluster_b = torch.randn(8, 2, dtype=torch.float32) * 0.05 + torch.tensor([5.0, 5.0])
+    inputs = torch.cat([cluster_a, cluster_b], dim=0)
+
+    _ = vq(inputs)  # first pass triggers refresh
+    result = vq(inputs)
+
+    flat_indices = result.indices.reshape(-1)
+    assert (flat_indices == 1).any() or (flat_indices == 2).any()

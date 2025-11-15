@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, List, Mapping, Sequence, Tuple, TYPE_CHECKING
+from typing import Dict, Iterable, List, Mapping, Sequence, Tuple, TYPE_CHECKING
 
+import hashlib
 import math
 
 try:  # pragma: no cover - torch optional at import time
@@ -74,26 +75,107 @@ class PrimitiveEmbedding(nn.Module if nn is not None else object):  # type: igno
         return self.embedding.weight[idx]
 
 
-class ProgramEncoder(nn.Module if nn is not None else object):  # type: ignore[misc]
-    def __init__(self, registry: PrimitiveRegistry, embedding_dim: int = 32) -> None:
+class ChildSumTreeLSTM(nn.Module if nn is not None else object):  # type: ignore[misc]
+    def __init__(self, input_dim: int, hidden_dim: int) -> None:
         _ensure_torch()
         super().__init__()
+        self.hidden_dim = hidden_dim
+        self.W_i = nn.Linear(input_dim, hidden_dim)
+        self.W_o = nn.Linear(input_dim, hidden_dim)
+        self.W_u = nn.Linear(input_dim, hidden_dim)
+        self.W_f = nn.Linear(input_dim, hidden_dim)
+
+        self.U_i = nn.Linear(hidden_dim, hidden_dim)
+        self.U_o = nn.Linear(hidden_dim, hidden_dim)
+        self.U_u = nn.Linear(hidden_dim, hidden_dim)
+        self.U_f = nn.Linear(hidden_dim, hidden_dim)
+
+    def forward(
+        self,
+        node_input: torch.Tensor,
+        child_states: Sequence[Tuple[torch.Tensor, torch.Tensor]],
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        device = node_input.device
+        dtype = node_input.dtype
+        if child_states:
+            child_hidden = torch.stack([state[0] for state in child_states], dim=0)
+            child_cells = torch.stack([state[1] for state in child_states], dim=0)
+            child_sum = torch.sum(child_hidden, dim=0)
+        else:
+            child_hidden = torch.zeros(0, self.hidden_dim, device=device, dtype=dtype)
+            child_cells = torch.zeros(0, self.hidden_dim, device=device, dtype=dtype)
+            child_sum = torch.zeros(self.hidden_dim, device=device, dtype=dtype)
+
+        i = torch.sigmoid(self.W_i(node_input) + self.U_i(child_sum))
+        o = torch.sigmoid(self.W_o(node_input) + self.U_o(child_sum))
+        u = torch.tanh(self.W_u(node_input) + self.U_u(child_sum))
+
+        if child_states:
+            forget_input = self.W_f(node_input)
+            forget_terms = []
+            for h_child, c_child in zip(child_hidden, child_cells):
+                f_child = torch.sigmoid(forget_input + self.U_f(h_child))
+                forget_terms.append(f_child * c_child)
+            forget_sum = torch.sum(torch.stack(forget_terms, dim=0), dim=0)
+        else:
+            forget_sum = torch.zeros(self.hidden_dim, device=device, dtype=dtype)
+
+        cell = i * u + forget_sum
+        hidden = o * torch.tanh(cell)
+        return hidden, cell
+
+
+class ProgramEncoder(nn.Module if nn is not None else object):  # type: ignore[misc]
+    def __init__(
+        self,
+        registry: PrimitiveRegistry,
+        embedding_dim: int = 32,
+        hidden_dim: int | None = None,
+        max_input_vars: int = 8,
+    ) -> None:
+        _ensure_torch()
+        super().__init__()
+        if max_input_vars <= 0:
+            raise ValueError("max_input_vars must be positive")
         self.primitive_embeddings = PrimitiveEmbedding(registry, embedding_dim)
-        self.linear = nn.Sequential(
-            nn.Linear(embedding_dim, embedding_dim),
+        self.hidden_dim = hidden_dim or embedding_dim
+        self.tree_lstm = ChildSumTreeLSTM(embedding_dim, self.hidden_dim)
+        self.output = nn.Sequential(
+            nn.Linear(self.hidden_dim, embedding_dim),
             nn.ReLU(),
         )
+        self.var_embeddings = nn.Embedding(max_input_vars, embedding_dim)
+        self._var_to_index: Dict[str, int] = {}
+        self._max_input_vars = max_input_vars
 
     def forward(self, program: Program) -> torch.Tensor:
-        embeddings = []
-        for expr in program.traverse():
-            if expr.primitive is not None:
-                embeddings.append(self.primitive_embeddings(expr.primitive.name))
-        if not embeddings:
-            return torch.zeros(self.primitive_embeddings.embedding.embedding_dim, device=self.primitive_embeddings.embedding.weight.device)
-        stacked = torch.stack(embeddings, dim=0)
-        pooled = stacked.mean(dim=0)
-        return self.linear(pooled)
+        hidden, _ = self._encode_expression(program.root)
+        return self.output(hidden)
+
+    def _encode_expression(self, expr: Expression) -> Tuple[torch.Tensor, torch.Tensor]:
+        if expr.var is not None:
+            node_input = self._embed_variable(expr.var.name)
+            return self.tree_lstm(node_input, ())
+
+        if expr.primitive is None:  # pragma: no cover - defensive guard
+            raise ValueError("expression must have a primitive or variable reference")
+
+        child_states = [self._encode_expression(child) for child in expr.args]
+        node_input = self.primitive_embeddings(expr.primitive.name)
+        return self.tree_lstm(node_input, child_states)
+
+    def _embed_variable(self, name: str) -> torch.Tensor:
+        idx = self._var_to_index.get(name)
+        if idx is None:
+            digest = hashlib.sha1(name.encode("utf-8")).digest()
+            idx = int.from_bytes(digest[:4], byteorder="little") % self._max_input_vars
+            self._var_to_index[name] = idx
+        index_tensor = torch.tensor(
+            idx,
+            dtype=torch.long,
+            device=self.var_embeddings.weight.device,
+        )
+        return self.var_embeddings(index_tensor)
 
 
 class GuidanceScorer(nn.Module if nn is not None else object):  # type: ignore[misc]

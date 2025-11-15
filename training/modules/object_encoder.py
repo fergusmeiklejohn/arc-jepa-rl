@@ -32,6 +32,9 @@ if torch is not None:  # pragma: no branch
             num_embeddings: int | None = 128,
             commitment_cost: float = 0.25,
             ema_decay: float | None = 0.99,
+            vq_refresh_enabled: bool = False,
+            vq_refresh_interval: int = 100,
+            vq_refresh_usage_threshold: float = 1e-3,
             activation: str = "gelu",
             relational: bool = True,
             relational_layers: int = 2,
@@ -75,6 +78,9 @@ if torch is not None:  # pragma: no branch
                     embedding_dim=hidden_dim,
                     commitment_cost=commitment_cost,
                     ema_decay=ema_decay,
+                    refresh_unused_codes=vq_refresh_enabled,
+                    refresh_interval=vq_refresh_interval,
+                    refresh_usage_threshold=vq_refresh_usage_threshold,
                 )
             else:
                 self.vq = None
