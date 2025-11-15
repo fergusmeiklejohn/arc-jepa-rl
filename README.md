@@ -28,6 +28,22 @@ and evaluate out-of-distribution reasoning.
   - `evaluate_arc.py` — Run the evaluation/ablation suite and emit JSON metrics.
 - `tests/` — Unit and integration tests covering generators, models, and envs.
 
+### DSL Primitive Coverage
+
+The default DSL registry (`training/dsl/primitives.py`) now spans topology and
+control-flow operators in addition to basic geometry:
+
+- Topology: `flood_fill`, `connected_components`, `shape_bbox`, `shape_centroid`,
+  and `shape_area` expose component-level reasoning hooks.
+- Collections: `components_filter_by_*`, `components_map_to_subgrids`, and
+  `components_fold_overlay` implement map/filter/fold combinators over the new
+  `ShapeList`/`GridList` types.
+- Logic: integer/shape list predicates plus `if_then_else` allow conditional
+  program branches.
+
+10+ regression tests live in `tests/test_dsl_primitives.py`, ensuring the few-shot
+solver enumerator can rely on the extended registry without regressions.
+
 ## Getting Started
 
 1. Create a Python environment (e.g., `python -m venv .venv && source .venv/bin/activate`).

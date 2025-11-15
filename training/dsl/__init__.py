@@ -1,6 +1,6 @@
 """Typed DSL for ARC program synthesis scaffolding."""
 
-from .types import DSLType, Color, Position, Shape, GridValue, Grid
+from .types import DSLType, Bool, Color, Position, Shape, ShapeList, GridList, GridValue, Grid
 from .primitives import Primitive, PrimitiveRegistry, build_default_primitive_registry
 from .enumerator import ProgramEnumerator, Program, InputVar, Expression, ProgramInterpreter
 from .guide import GuidanceScorer, ProgramEncoder, GuidedBeamSearch, encode_program_features
@@ -9,9 +9,12 @@ from .scoring import NeuralGuidedScorer, ProgramScore
 
 __all__ = [
     "DSLType",
+    "Bool",
     "Color",
     "Position",
     "Shape",
+    "ShapeList",
+    "GridList",
     "GridValue",
     "Grid",
     "Primitive",

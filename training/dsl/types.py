@@ -16,5 +16,8 @@ class DSLType:
 Color = DSLType("Color")
 Position = DSLType("Position")
 Shape = DSLType("Shape")
+ShapeList = DSLType("ShapeList")
 Grid = DSLType("Grid")
+GridList = DSLType("GridList")
 GridValue = DSLType("GridValue")
+Bool = DSLType("Bool")
