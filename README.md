@@ -76,6 +76,32 @@ PYTHONPATH=. .venv/bin/python scripts/evaluate_arc.py \
 The loader validates each ARC file, uses all provided train pairs as few-shot
 examples, and checks predictions against any available test outputs.
 
+### Pre-tokenized JEPA manifests
+
+Long JEPA runs avoid Python tokenization overhead by precomputing object tokens
+once and streaming them from disk:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/pretokenize_jepa.py \
+  --config configs/training/jepa_pretrain.yaml \
+  --output artifacts/tokenized/pilot_curriculum
+```
+
+This reads the manifest/config defaults, writes sharded `.pt` tensors plus a
+`metadata.json` descriptor, and preserves per-sample metadata in each shard.
+Point the trainer at the tokenized directory to enable the zero-tokenization
+path (use the same `tokenizer` + `data.context_window` you precomputed with):
+
+```yaml
+# configs/training/jepa_pretrain.yaml
+pre_tokenized:
+  path: artifacts/tokenized/pilot_curriculum
+```
+
+`scripts/train_jepa.py` automatically switches to the new
+`TokenizedPairDataset` when `pre_tokenized.path` is set; otherwise it falls back
+to manifest-time tokenization.
+
 ### JEPA pretraining
 
 Run full JEPA training against any manifest:

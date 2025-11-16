@@ -7,8 +7,9 @@ from typing import Iterable, Mapping, Sequence
 
 from arcgen import Grid
 
-from .dataset import GridPairBatch, InMemoryGridPairDataset
+from .dataset import GridPairBatch, InMemoryGridPairDataset, TokenizedPairBatch
 from .trainer import ObjectCentricJEPATrainer
+from .object_pipeline import ObjectTokenBatch
 
 from training.modules.projection import InfoNCEQueue, ProjectionHead
 
@@ -235,14 +236,71 @@ class ObjectCentricJEPAExperiment:
             encoded_target=target_repr.detach().cpu(),
         )
 
+    def train_step_tokenized(self, batch: TokenizedPairBatch) -> TrainStepResult:
+        token_batch = batch.to(self.device)
+        context_repr = self._encode_tokenized_context(token_batch)
+        target_repr = self._encode_tokenized_target(token_batch)
+
+        context_proj = self.projection_head(context_repr)
+        target_proj = self.projection_head(target_repr)
+
+        loss = self._info_nce_loss(context_proj, target_proj)
+
+        self.optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        self.optimizer.step()
+
+        with torch.no_grad():
+            self.queue.enqueue(target_proj.detach())
+
+        return TrainStepResult(
+            loss=float(loss.detach().cpu().item()),
+            encoded_context=context_repr.detach().cpu(),
+            encoded_target=target_repr.detach().cpu(),
+        )
+
+    def _encode_tokenized_context(self, batch: TokenizedPairBatch) -> torch.Tensor:
+        batch_size = batch.context_features.size(0)
+        context_length = batch.context_length
+        max_objects = batch.context_features.size(2)
+        feature_dim = batch.context_features.size(3)
+
+        flattened_features = batch.context_features.reshape(batch_size * context_length, max_objects, feature_dim)
+        flattened_mask = batch.context_mask.reshape(batch_size * context_length, max_objects)
+        flattened_adj = batch.context_adjacency.reshape(batch_size * context_length, max_objects, max_objects)
+
+        token_batch = ObjectTokenBatch(
+            features=flattened_features,
+            mask=flattened_mask,
+            adjacency=flattened_adj,
+        )
+        encoding = self.trainer.object_encoder.encode_tokens(token_batch, device=self.device)
+        per_grid_repr = self._masked_mean(encoding.embeddings, encoding.mask.to(self.device))
+        reshaped = per_grid_repr.view(batch_size, context_length, -1)
+        return reshaped.mean(dim=1)
+
+    def _encode_tokenized_target(self, batch: TokenizedPairBatch) -> torch.Tensor:
+        token_batch = ObjectTokenBatch(
+            features=batch.target_features,
+            mask=batch.target_mask,
+            adjacency=batch.target_adjacency,
+        )
+        encoding = self.trainer.object_encoder.encode_tokens(token_batch, device=self.device)
+        return self._masked_mean(encoding.embeddings, encoding.mask.to(self.device))
+
     def train_epoch(
         self,
-        dataset: Iterable[GridPairBatch],
+        dataset: Iterable[GridPairBatch | TokenizedPairBatch],
     ) -> float:
         total_loss = 0.0
         batches = 0
         for batch in dataset:
-            result = self.train_step(batch.context, batch.target)
+            if isinstance(batch, GridPairBatch):
+                result = self.train_step(batch.context, batch.target)
+            elif isinstance(batch, TokenizedPairBatch):
+                result = self.train_step_tokenized(batch)
+            else:
+                raise TypeError(f"Unsupported batch type: {type(batch)}")
             total_loss += result.loss
             batches += 1
 

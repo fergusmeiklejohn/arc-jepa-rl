@@ -177,6 +177,17 @@ class ObjectCentricJEPAEncoder:
             raise ValueError("grids must contain at least one entry")
 
         batch = build_object_token_batch(grids, self.tokenizer_config, device=device)
+        return self.encode_tokens(batch, device=device)
+
+    def encode_tokens(
+        self,
+        tokens: ObjectTokenBatch,
+        *,
+        device: "torch.device | None" = None,
+    ) -> ObjectCentricEncoding:
+        _ensure_torch_available()
+
+        batch = tokens if device is None else tokens.to(device)
         encoder_out = self.encoder(batch.features, mask=batch.mask, adjacency=batch.adjacency)
 
         return ObjectCentricEncoding(

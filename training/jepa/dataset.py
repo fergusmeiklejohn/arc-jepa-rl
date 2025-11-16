@@ -6,9 +6,16 @@ import json
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator, List, Mapping, MutableMapping, Sequence, Tuple
+from typing import Dict, Iterable, Iterator, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 from arcgen import Grid
+
+try:  # pragma: no cover - torch optional at import
+    import torch
+    from torch.utils.data import Dataset
+except Exception:  # pragma: no cover
+    torch = None  # type: ignore
+    Dataset = object  # type: ignore[misc]
 
 
 @dataclass(frozen=True)
@@ -34,6 +41,56 @@ class GridPairBatch:
     @property
     def context_length(self) -> int:
         return len(self.context[0])
+
+
+@dataclass(frozen=True)
+class TokenizedPairSample:
+    """Single context/target example with pre-tokenized tensors."""
+
+    context_features: "torch.Tensor"
+    context_mask: "torch.Tensor"
+    context_adjacency: "torch.Tensor"
+    target_features: "torch.Tensor"
+    target_mask: "torch.Tensor"
+    target_adjacency: "torch.Tensor"
+    metadata: Mapping[str, object] | None = None
+
+
+@dataclass(frozen=True)
+class TokenizedPairBatch:
+    """Stacked batch of tokenized context/target tensors."""
+
+    context_features: "torch.Tensor"
+    context_mask: "torch.Tensor"
+    context_adjacency: "torch.Tensor"
+    target_features: "torch.Tensor"
+    target_mask: "torch.Tensor"
+    target_adjacency: "torch.Tensor"
+    metadata: Sequence[Mapping[str, object] | None]
+
+    def to(self, device: "torch.device | str") -> "TokenizedPairBatch":  # pragma: no cover - thin wrapper
+        return TokenizedPairBatch(
+            context_features=self.context_features.to(device),
+            context_mask=self.context_mask.to(device),
+            context_adjacency=self.context_adjacency.to(device),
+            target_features=self.target_features.to(device),
+            target_mask=self.target_mask.to(device),
+            target_adjacency=self.target_adjacency.to(device),
+            metadata=self.metadata,
+        )
+
+    @property
+    def batch_size(self) -> int:
+        return self.context_features.size(0)
+
+    @property
+    def context_length(self) -> int:
+        return self.context_features.size(1)
+
+
+def _ensure_torch_available() -> None:
+    if torch is None:  # pragma: no cover - safety net
+        raise RuntimeError("PyTorch is required for tokenized JEPA datasets")
 
 
 @dataclass(frozen=True)
@@ -173,6 +230,45 @@ def _merge_metadata(base: Mapping[str, object] | None, extra: Mapping[str, objec
     merged: MutableMapping[str, object] = dict(base)
     merged.update(extra)
     return merged
+
+
+def iter_manifest_examples(
+    manifest_path: Path | str,
+    *,
+    context_window: int,
+    target_offset: int,
+) -> Iterator[ManifestExample]:
+    """Yield manifest examples lazily without materialising the dataset."""
+
+    path = Path(manifest_path)
+    if not path.exists():
+        raise FileNotFoundError(f"manifest path does not exist: {path}")
+
+    with path.open("r", encoding="utf-8") as handle:
+        for line_no, raw_line in enumerate(handle, 1):
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"failed to parse JSON on line {line_no} of {path}"
+                ) from exc
+            if not isinstance(parsed, Mapping):
+                raise ValueError(
+                    f"manifest line {line_no} in {path} must decode to a mapping",
+                )
+            try:
+                yield from _examples_from_record(
+                    parsed,
+                    context_window=context_window,
+                    target_offset=target_offset,
+                )
+            except Exception as exc:
+                raise ValueError(
+                    f"invalid manifest entry on line {line_no} of {path}: {exc}"
+                ) from exc
 
 
 def _examples_from_record(
@@ -393,34 +489,13 @@ class ManifestGridPairDataset:
             raise ValueError(f"manifest {self.manifest_path} produced no samples")
 
     def _load_examples(self) -> List[ManifestExample]:
-        examples: List[ManifestExample] = []
-        with self.manifest_path.open("r", encoding="utf-8") as handle:
-            for line_no, raw_line in enumerate(handle, 1):
-                line = raw_line.strip()
-                if not line:
-                    continue
-                try:
-                    parsed = json.loads(line)
-                except json.JSONDecodeError as exc:
-                    raise ValueError(
-                        f"failed to parse JSON on line {line_no} of {self.manifest_path}"
-                    ) from exc
-                if not isinstance(parsed, Mapping):
-                    raise ValueError(
-                        f"manifest line {line_no} in {self.manifest_path} must decode to a mapping",
-                    )
-                try:
-                    for example in _examples_from_record(
-                        parsed,
-                        context_window=self.context_window,
-                        target_offset=self.target_offset,
-                    ):
-                        examples.append(example)
-                except Exception as exc:
-                    raise ValueError(
-                        f"invalid manifest entry on line {line_no} of {self.manifest_path}: {exc}"
-                    ) from exc
-        return examples
+        return list(
+            iter_manifest_examples(
+                self.manifest_path,
+                context_window=self.context_window,
+                target_offset=self.target_offset,
+            )
+        )
 
     def __len__(self) -> int:
         if self.drop_last:
@@ -473,3 +548,131 @@ def build_dummy_dataset(num_batches: int = 4, context_length: int = 3) -> InMemo
     context_sequence = tuple(grid for _ in range(context_length))
     pairs = [([context_sequence, context_sequence], [grid, grid]) for _ in range(num_batches)]
     return InMemoryGridPairDataset(pairs)
+
+
+class TokenizedPairDataset(Dataset):
+    """Dataset that indexes into pre-tokenized JEPA shards."""
+
+    def __init__(self, metadata_path: str | Path) -> None:
+        _ensure_torch_available()
+
+        path = Path(metadata_path)
+        if path.is_dir():
+            path = path / "metadata.json"
+        if not path.exists():
+            raise FileNotFoundError(f"tokenized metadata not found: {path}")
+
+        with path.open("r", encoding="utf-8") as handle:
+            summary = json.load(handle)
+        if not isinstance(summary, Mapping):
+            raise ValueError("tokenized metadata must decode to a mapping")
+
+        shards = summary.get("shards")
+        if not isinstance(shards, Sequence) or not shards:
+            raise ValueError("metadata must include a non-empty 'shards' list")
+
+        self._root = path.parent
+        self._shards: List[Dict[str, object]] = []
+        offset = 0
+        for shard in shards:
+            if not isinstance(shard, Mapping):
+                raise ValueError("each shard entry must be a mapping")
+            shard_path = shard.get("path")
+            if not isinstance(shard_path, str):
+                raise ValueError("shard entries must include 'path'")
+            count = int(shard.get("num_samples", 0))
+            if count <= 0:
+                raise ValueError("shard sample counts must be positive")
+            entry = {
+                "path": self._root / shard_path,
+                "count": count,
+                "offset": offset,
+            }
+            self._shards.append(entry)
+            offset += count
+
+        if offset == 0:
+            raise ValueError("tokenized dataset contains no samples")
+
+        self._total = offset
+        self.context_length = int(summary.get("context_length", 1))
+        if self.context_length <= 0:
+            raise ValueError("metadata.context_length must be positive")
+        self.max_objects = int(summary.get("max_objects", 1))
+        self.feature_dim = int(summary.get("feature_dim", 1))
+        self._tokenizer_meta = summary.get("tokenizer", {})
+        self._manifest = summary.get("manifest")
+        self._cache: Dict[int, Mapping[str, object]] = {}
+
+    def __len__(self) -> int:
+        return self._total
+
+    def __getitem__(self, index: int) -> TokenizedPairSample:
+        if index < 0 or index >= self._total:
+            raise IndexError("index out of range")
+
+        shard_idx = self._find_shard_for_index(index)
+        shard = self._shards[shard_idx]
+        local_index = index - int(shard["offset"])
+        payload = self._load_shard(shard_idx)
+
+        context_features = payload["context_features"][local_index]
+        context_mask = payload["context_mask"][local_index]
+        context_adjacency = payload["context_adjacency"][local_index]
+        target_features = payload["target_features"][local_index]
+        target_mask = payload["target_mask"][local_index]
+        target_adjacency = payload["target_adjacency"][local_index]
+        metadata_entries = payload.get("metadata") or []
+        metadata = metadata_entries[local_index] if local_index < len(metadata_entries) else None
+
+        return TokenizedPairSample(
+            context_features=context_features,
+            context_mask=context_mask,
+            context_adjacency=context_adjacency,
+            target_features=target_features,
+            target_mask=target_mask,
+            target_adjacency=target_adjacency,
+            metadata=metadata,
+        )
+
+    # ------------------------------------------------------------------ internals
+    def _find_shard_for_index(self, index: int) -> int:
+        for shard_idx, shard in enumerate(self._shards):
+            offset = int(shard["offset"])
+            count = int(shard["count"])
+            if offset <= index < offset + count:
+                return shard_idx
+        raise IndexError("failed to locate shard for index")
+
+    def _load_shard(self, shard_idx: int) -> Mapping[str, object]:
+        cached = self._cache.get(shard_idx)
+        if cached is not None:
+            return cached
+        shard_path = self._shards[shard_idx]["path"]
+        data = torch.load(shard_path, map_location="cpu")
+        self._cache[shard_idx] = data
+        return data
+
+
+def collate_tokenized_samples(samples: Sequence[TokenizedPairSample]) -> TokenizedPairBatch:
+    _ensure_torch_available()
+    if not samples:
+        raise ValueError("collate_tokenized_samples requires at least one sample")
+
+    context_features = torch.stack([sample.context_features for sample in samples], dim=0)
+    context_mask = torch.stack([sample.context_mask for sample in samples], dim=0)
+    context_adjacency = torch.stack([sample.context_adjacency for sample in samples], dim=0)
+    target_features = torch.stack([sample.target_features for sample in samples], dim=0)
+    target_mask = torch.stack([sample.target_mask for sample in samples], dim=0)
+    target_adjacency = torch.stack([sample.target_adjacency for sample in samples], dim=0)
+    metadata = tuple(sample.metadata for sample in samples)
+
+    return TokenizedPairBatch(
+        context_features=context_features,
+        context_mask=context_mask,
+        context_adjacency=context_adjacency,
+        target_features=target_features,
+        target_mask=target_mask,
+        target_adjacency=target_adjacency,
+        metadata=metadata,
+    )

@@ -6,6 +6,7 @@ import argparse
 import json
 from pathlib import Path
 import sys
+from typing import Mapping
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -19,7 +20,11 @@ except Exception:  # pragma: no cover
     torch = None  # type: ignore
 
 from training.jepa import ObjectCentricJEPAExperiment, load_jepa_config
-from training.jepa.dataset import ManifestGridPairDataset
+from training.jepa.dataset import (
+    ManifestGridPairDataset,
+    TokenizedPairDataset,
+    collate_tokenized_samples,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -69,6 +74,38 @@ def _build_dataset(config: dict, manifest_path: Path) -> ManifestGridPairDataset
     )
 
 
+def _build_tokenized_loader(config: dict, dataset_cfg: Mapping[str, object]):
+    if torch is None:
+        raise RuntimeError("PyTorch is required for tokenized dataset loading")
+    if not isinstance(dataset_cfg, Mapping):
+        raise ValueError("config['pre_tokenized'] must be a mapping")
+
+    data_cfg = config.get("data", {})
+    if not isinstance(data_cfg, Mapping):
+        raise ValueError("config['data'] must be a mapping")
+
+    training_cfg = config.get("training", {})
+    if not isinstance(training_cfg, Mapping):
+        raise ValueError("config['training'] must be a mapping")
+
+    dataset_path = dataset_cfg.get("path")
+    if not dataset_path:
+        raise ValueError("pre_tokenized.path must be set when using pre-tokenized data")
+
+    batch_size = int(training_cfg.get("batch_size", 32))
+    shuffle = bool(dataset_cfg.get("shuffle", data_cfg.get("shuffle", True)))
+    drop_last = bool(dataset_cfg.get("drop_last", training_cfg.get("drop_last", False)))
+
+    dataset = TokenizedPairDataset(dataset_path)
+    return torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        drop_last=drop_last,
+        collate_fn=collate_tokenized_samples,
+    )
+
+
 def main() -> None:
     args = parse_args()
     config = dict(load_jepa_config(args.config))
@@ -90,14 +127,23 @@ def main() -> None:
     if torch is None:
         raise RuntimeError("PyTorch is required for full JEPA training")
 
-    manifest_value = config.get("dataset_manifest")
-    if not manifest_value:
-        raise ValueError("JEPA config must define 'dataset_manifest'")
-    manifest_path = Path(manifest_value)
-    if not manifest_path.exists():
-        raise FileNotFoundError(f"dataset manifest not found: {manifest_path}")
+    tokenized_cfg = config.get("pre_tokenized")
+    dataset = None
+    manifest_path: Path | None = None
+    tokenized_path: Path | None = None
 
-    dataset = _build_dataset(config, manifest_path)
+    if isinstance(tokenized_cfg, Mapping) and tokenized_cfg.get("path"):
+        dataset = _build_tokenized_loader(config, tokenized_cfg)
+        tokenized_path = Path(tokenized_cfg["path"])
+    else:
+        manifest_value = config.get("dataset_manifest")
+        if not manifest_value:
+            raise ValueError("JEPA config must define 'dataset_manifest' when pre_tokenized.path is not provided")
+        manifest_path = Path(manifest_value)
+        if not manifest_path.exists():
+            raise FileNotFoundError(f"dataset manifest not found: {manifest_path}")
+        dataset = _build_dataset(config, manifest_path)
+
     epochs = int(training_cfg.get("epochs", 1))
 
     checkpoint_dir = Path(training_cfg.get("checkpoint_dir", "artifacts/jepa/pretrain"))
@@ -153,7 +199,8 @@ def main() -> None:
 
     metrics = {
         "config": str(args.config),
-        "manifest": str(manifest_path),
+        "manifest": str(manifest_path) if manifest_path is not None else None,
+        "tokenized_dataset": str(tokenized_path) if tokenized_path is not None else None,
         "epochs": epochs,
         "batch_size": int(training_cfg.get("batch_size", 32)),
         "device": device,
