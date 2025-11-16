@@ -76,6 +76,32 @@ PYTHONPATH=. .venv/bin/python scripts/evaluate_arc.py \
 The loader validates each ARC file, uses all provided train pairs as few-shot
 examples, and checks predictions against any available test outputs.
 
+### ARC dev baseline snapshot (ARC-1 training)
+
+The repo tracks a baseline evaluation against the official ARC-1 training split.
+
+1. Download the dataset once (the official JSON bundle is open-source):  
+   `git clone --depth 1 https://github.com/fchollet/ARC external/ARC`
+2. Run the evaluation harness against the training directory:
+
+   ```bash
+   PYTHONPATH=. .venv/bin/python scripts/evaluate_arc.py \
+     --arc-dev-root external/ARC/data/training \
+     --output artifacts/eval/arc_dev_baseline.json
+   ```
+
+Current baseline (DSL enumerator, max_nodes=3, no meta priors available for ARC-1):
+
+| Variant     | Success Rate | Avg. Programs Tested |
+|-------------|--------------|----------------------|
+| `dsl_only`  | 2.25%        | 235.57               |
+| `meta_guided`* | 2.25%    | 235.57               |
+
+\*Meta-guided mode falls back to the vanilla registry on ARC-1 because no rule traces
+are provided to derive primitive histograms.
+
+The JSON summary for reproducibility lives at `artifacts/eval/arc_dev_baseline.json`.
+
 ### Pre-tokenized JEPA manifests
 
 Long JEPA runs avoid Python tokenization overhead by precomputing object tokens

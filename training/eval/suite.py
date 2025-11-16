@@ -135,7 +135,7 @@ class EvaluationSuite:
         if variant.top_k_primitives is not None:
             allowed = self._top_primitives(variant.top_k_primitives)
 
-        if allowed is None:
+        if not allowed:
             return base_registry
 
         allowed_set = set(allowed)
