@@ -1,8 +1,15 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from arcgen import Grid
-from training.jepa import AugmentationConfig, GridPairBatch, ManifestGridPairDataset
+from training.jepa import (
+    AugmentationConfig,
+    GridPairBatch,
+    ManifestGridPairDataset,
+    ManifestTokenizedPairDataset,
+)
 
 
 def _write_manifest(tmp_path: Path, records: list[dict]) -> Path:
@@ -141,3 +148,46 @@ def test_manifest_dataset_applies_masking_augmentation(tmp_path):
         for row in grid.cells
         for value in row
     )
+
+
+def test_manifest_tokenized_dataset_returns_tokenized_samples(tmp_path):
+    torch = pytest.importorskip("torch")
+
+    manifest = [
+        {
+            "context": [
+                [
+                    [0, 1],
+                    [0, 0],
+                ],
+                [
+                    [0, 2],
+                    [0, 2],
+                ],
+            ],
+            "target": [
+                [1, 1],
+                [0, 0],
+            ],
+            "metadata": {"sample_id": "tok-1"},
+        }
+    ]
+    path = _write_manifest(tmp_path, manifest)
+
+    dataset = ManifestTokenizedPairDataset(
+        path,
+        context_window=2,
+        target_offset=1,
+        augmentations=None,
+        tokenizer_config={
+            "max_objects": 2,
+            "max_color_features": 1,
+        },
+        seed=17,
+    )
+
+    sample = dataset[0]
+    assert sample.context_features.shape == (2, dataset.max_objects, dataset.feature_dim)
+    assert sample.target_features.shape == (dataset.max_objects, dataset.feature_dim)
+    assert sample.metadata == {"sample_id": "tok-1"}
+    assert torch.all(sample.context_mask >= 0)

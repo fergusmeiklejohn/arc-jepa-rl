@@ -21,7 +21,7 @@ except Exception:  # pragma: no cover
 
 from training.jepa import ObjectCentricJEPAExperiment, load_jepa_config
 from training.jepa.dataset import (
-    ManifestGridPairDataset,
+    ManifestTokenizedPairDataset,
     TokenizedPairDataset,
     collate_tokenized_samples,
 )
@@ -44,42 +44,13 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _build_dataset(config: dict, manifest_path: Path) -> ManifestGridPairDataset:
-    data_cfg = config.get("data", {})
-    if not isinstance(data_cfg, dict):
-        raise ValueError("config['data'] must be a mapping")
-
-    training_cfg = config.get("training", {})
-    if not isinstance(training_cfg, dict):
-        raise ValueError("config['training'] must be a mapping")
-
-    batch_size = int(training_cfg.get("batch_size", 32))
-    shuffle = bool(data_cfg.get("shuffle", True))
-    drop_last = bool(data_cfg.get("drop_last", False) or training_cfg.get("drop_last", False))
-    dataset_seed = data_cfg.get("seed", config.get("seed"))
-
-    context_window = int(data_cfg.get("context_window", data_cfg.get("context_length", 3)))
-    if context_window <= 0:
-        raise ValueError("data.context_window must be positive")
-
-    return ManifestGridPairDataset(
-        manifest_path,
-        batch_size=batch_size,
-        context_window=context_window,
-        target_offset=int(data_cfg.get("target_offset", 1)),
-        shuffle=shuffle,
-        drop_last=drop_last,
-        augmentations=config.get("augmentations"),
-        seed=dataset_seed,
-    )
-
-
-def _build_tokenized_loader(config: dict, dataset_cfg: Mapping[str, object]):
-    if torch is None:
-        raise RuntimeError("PyTorch is required for tokenized dataset loading")
-    if not isinstance(dataset_cfg, Mapping):
-        raise ValueError("config['pre_tokenized'] must be a mapping")
-
+def _loader_settings(
+    config: dict,
+    *,
+    shuffle_override: Optional[bool] = None,
+    drop_last_override: Optional[bool] = None,
+    seed_override: Optional[int] = None,
+) -> dict:
     data_cfg = config.get("data", {})
     if not isinstance(data_cfg, Mapping):
         raise ValueError("config['data'] must be a mapping")
@@ -88,22 +59,106 @@ def _build_tokenized_loader(config: dict, dataset_cfg: Mapping[str, object]):
     if not isinstance(training_cfg, Mapping):
         raise ValueError("config['training'] must be a mapping")
 
+    batch_size = int(training_cfg.get("batch_size", 32))
+    shuffle = bool(shuffle_override if shuffle_override is not None else data_cfg.get("shuffle", True))
+    drop_last_cfg = bool(data_cfg.get("drop_last", False))
+    training_drop_last = bool(training_cfg.get("drop_last", False))
+    drop_last_value = drop_last_override if drop_last_override is not None else (drop_last_cfg or training_drop_last)
+    num_workers = int(training_cfg.get("num_workers", 0))
+    pin_memory = bool(training_cfg.get("pin_memory", False))
+    seed_value = seed_override if seed_override is not None else data_cfg.get("seed", config.get("seed"))
+
+    generator = None
+    if torch is not None and seed_value is not None:
+        generator = torch.Generator()
+        generator.manual_seed(int(seed_value))
+
+    return {
+        "batch_size": batch_size,
+        "shuffle": shuffle,
+        "drop_last": bool(drop_last_value),
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+        "generator": generator,
+        "seed": seed_value,
+    }
+
+
+def _create_tokenized_loader(dataset, loader_cfg: Mapping[str, object]):
+    if torch is None:
+        raise RuntimeError("PyTorch is required for JEPA training")
+
+    num_workers = int(loader_cfg.get("num_workers", 0))
+    loader_kwargs = {
+        "batch_size": int(loader_cfg.get("batch_size", 32)),
+        "shuffle": bool(loader_cfg.get("shuffle", True)),
+        "drop_last": bool(loader_cfg.get("drop_last", False)),
+        "collate_fn": collate_tokenized_samples,
+        "num_workers": num_workers,
+        "pin_memory": bool(loader_cfg.get("pin_memory", False)),
+    }
+    if num_workers > 0:
+        loader_kwargs["persistent_workers"] = True
+    generator = loader_cfg.get("generator")
+    if generator is not None:
+        loader_kwargs["generator"] = generator
+    return torch.utils.data.DataLoader(dataset, **loader_kwargs)
+
+
+def _build_manifest_loader(
+    config: dict,
+    manifest_path: Path,
+    tokenizer_config,
+):
+    data_cfg = config.get("data", {})
+    if not isinstance(data_cfg, Mapping):
+        raise ValueError("config['data'] must be a mapping")
+
+    context_window = int(data_cfg.get("context_window", data_cfg.get("context_length", 3)))
+    if context_window <= 0:
+        raise ValueError("data.context_window must be positive")
+
+    loader_cfg = _loader_settings(config)
+
+    dataset = ManifestTokenizedPairDataset(
+        manifest_path,
+        context_window=context_window,
+        target_offset=int(data_cfg.get("target_offset", 1)),
+        augmentations=config.get("augmentations"),
+        tokenizer_config=tokenizer_config,
+        seed=loader_cfg.get("seed"),
+    )
+    return _create_tokenized_loader(dataset, loader_cfg)
+
+
+def _build_tokenized_loader(config: dict, dataset_cfg: Mapping[str, object]):
+    if torch is None:
+        raise RuntimeError("PyTorch is required for tokenized dataset loading")
+    if not isinstance(dataset_cfg, Mapping):
+        raise ValueError("config['pre_tokenized'] must be a mapping")
+
     dataset_path = dataset_cfg.get("path")
     if not dataset_path:
         raise ValueError("pre_tokenized.path must be set when using pre-tokenized data")
 
-    batch_size = int(training_cfg.get("batch_size", 32))
-    shuffle = bool(dataset_cfg.get("shuffle", data_cfg.get("shuffle", True)))
-    drop_last = bool(dataset_cfg.get("drop_last", training_cfg.get("drop_last", False)))
+    shuffle_override = dataset_cfg.get("shuffle")
+    if shuffle_override is not None:
+        shuffle_override = bool(shuffle_override)
+    drop_last_override = dataset_cfg.get("drop_last")
+    if drop_last_override is not None:
+        drop_last_override = bool(drop_last_override)
+    seed_override = dataset_cfg.get("seed")
+    seed_override = int(seed_override) if seed_override is not None else None
+
+    loader_cfg = _loader_settings(
+        config,
+        shuffle_override=shuffle_override,
+        drop_last_override=drop_last_override,
+        seed_override=seed_override,
+    )
 
     dataset = TokenizedPairDataset(dataset_path)
-    return torch.utils.data.DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=shuffle,
-        drop_last=drop_last,
-        collate_fn=collate_tokenized_samples,
-    )
+    return _create_tokenized_loader(dataset, loader_cfg)
 
 
 def main() -> None:
@@ -128,12 +183,12 @@ def main() -> None:
         raise RuntimeError("PyTorch is required for full JEPA training")
 
     tokenized_cfg = config.get("pre_tokenized")
-    dataset = None
+    data_loader = None
     manifest_path: Path | None = None
     tokenized_path: Path | None = None
 
     if isinstance(tokenized_cfg, Mapping) and tokenized_cfg.get("path"):
-        dataset = _build_tokenized_loader(config, tokenized_cfg)
+        data_loader = _build_tokenized_loader(config, tokenized_cfg)
         tokenized_path = Path(tokenized_cfg["path"])
     else:
         manifest_value = config.get("dataset_manifest")
@@ -142,7 +197,7 @@ def main() -> None:
         manifest_path = Path(manifest_value)
         if not manifest_path.exists():
             raise FileNotFoundError(f"dataset manifest not found: {manifest_path}")
-        dataset = _build_dataset(config, manifest_path)
+        data_loader = _build_manifest_loader(config, manifest_path, experiment.trainer.tokenizer_config)
 
     epochs = int(training_cfg.get("epochs", 1))
 
@@ -172,8 +227,10 @@ def main() -> None:
             )
 
     losses: list[float] = []
+    assert data_loader is not None
+
     for epoch in range(1, epochs + 1):
-        epoch_loss = experiment.train_epoch(dataset)
+        epoch_loss = experiment.train_epoch(data_loader)
         losses.append(epoch_loss)
         print(f"Epoch {epoch}/{epochs}: loss={epoch_loss:.6f}")
 

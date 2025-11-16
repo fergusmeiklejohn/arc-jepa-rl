@@ -87,6 +87,7 @@ class ObjectCentricJEPAExperiment:
 
         self.config = config
         self.device = torch.device(device) if device is not None else torch.device("cpu")
+        self._use_non_blocking = self.device.type != "cpu"
         data_cfg = config.get("data", {})
         if isinstance(data_cfg, Mapping):
             context_length_value = data_cfg.get("context_length", data_cfg.get("context_window", 3))
@@ -95,6 +96,12 @@ class ObjectCentricJEPAExperiment:
         self.context_length = int(context_length_value)
         if self.context_length <= 0:
             raise ValueError("context length must be positive")
+
+        training_cfg = config.get("training", {})
+        if isinstance(training_cfg, Mapping):
+            self.grad_accum_steps = max(1, int(training_cfg.get("grad_accum_steps", 1)))
+        else:
+            self.grad_accum_steps = 1
 
         self.trainer = ObjectCentricJEPATrainer(config)
         self.trainer.encoder.to(self.device)
@@ -214,14 +221,7 @@ class ObjectCentricJEPAExperiment:
         if not target_grids:
             raise ValueError("target_grids must contain at least one entry")
 
-        context_repr = self._encode_context_sequences(context_sequences)
-        target_encoding = self.trainer.object_encoder.encode(target_grids, device=self.device)
-        target_repr = self._masked_mean(target_encoding.embeddings, target_encoding.mask.to(self.device))
-
-        context_proj = self.projection_head(context_repr)
-        target_proj = self.projection_head(target_repr)
-
-        loss = self._info_nce_loss(context_proj, target_proj)
+        loss, context_repr, target_repr, target_proj = self._forward_from_grids(context_sequences, target_grids)
 
         self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -237,14 +237,8 @@ class ObjectCentricJEPAExperiment:
         )
 
     def train_step_tokenized(self, batch: TokenizedPairBatch) -> TrainStepResult:
-        token_batch = batch.to(self.device)
-        context_repr = self._encode_tokenized_context(token_batch)
-        target_repr = self._encode_tokenized_target(token_batch)
-
-        context_proj = self.projection_head(context_repr)
-        target_proj = self.projection_head(target_repr)
-
-        loss = self._info_nce_loss(context_proj, target_proj)
+        token_batch = batch.to(self.device, non_blocking=self._use_non_blocking)
+        loss, context_repr, target_repr, target_proj = self._forward_from_token_batch(token_batch)
 
         self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -258,6 +252,31 @@ class ObjectCentricJEPAExperiment:
             encoded_context=context_repr.detach().cpu(),
             encoded_target=target_repr.detach().cpu(),
         )
+
+    def _forward_from_grids(
+        self,
+        context_sequences: Sequence[Sequence[Grid]],
+        target_grids: Sequence[Grid],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        context_repr = self._encode_context_sequences(context_sequences)
+        target_encoding = self.trainer.object_encoder.encode(target_grids, device=self.device)
+        target_repr = self._masked_mean(target_encoding.embeddings, target_encoding.mask.to(self.device))
+
+        context_proj = self.projection_head(context_repr)
+        target_proj = self.projection_head(target_repr)
+        loss = self._info_nce_loss(context_proj, target_proj)
+        return loss, context_repr, target_repr, target_proj
+
+    def _forward_from_token_batch(
+        self,
+        batch: TokenizedPairBatch,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        context_repr = self._encode_tokenized_context(batch)
+        target_repr = self._encode_tokenized_target(batch)
+        context_proj = self.projection_head(context_repr)
+        target_proj = self.projection_head(target_repr)
+        loss = self._info_nce_loss(context_proj, target_proj)
+        return loss, context_repr, target_repr, target_proj
 
     def _encode_tokenized_context(self, batch: TokenizedPairBatch) -> torch.Tensor:
         batch_size = batch.context_features.size(0)
@@ -274,7 +293,11 @@ class ObjectCentricJEPAExperiment:
             mask=flattened_mask,
             adjacency=flattened_adj,
         )
-        encoding = self.trainer.object_encoder.encode_tokens(token_batch, device=self.device)
+        encoding = self.trainer.object_encoder.encode_tokens(
+            token_batch,
+            device=self.device,
+            non_blocking=self._use_non_blocking,
+        )
         per_grid_repr = self._masked_mean(encoding.embeddings, encoding.mask.to(self.device))
         reshaped = per_grid_repr.view(batch_size, context_length, -1)
         return reshaped.mean(dim=1)
@@ -285,7 +308,11 @@ class ObjectCentricJEPAExperiment:
             mask=batch.target_mask,
             adjacency=batch.target_adjacency,
         )
-        encoding = self.trainer.object_encoder.encode_tokens(token_batch, device=self.device)
+        encoding = self.trainer.object_encoder.encode_tokens(
+            token_batch,
+            device=self.device,
+            non_blocking=self._use_non_blocking,
+        )
         return self._masked_mean(encoding.embeddings, encoding.mask.to(self.device))
 
     def train_epoch(
@@ -294,18 +321,44 @@ class ObjectCentricJEPAExperiment:
     ) -> float:
         total_loss = 0.0
         batches = 0
+        pending_losses: list[torch.Tensor] = []
+        pending_targets: list[torch.Tensor] = []
+
+        def _apply_pending() -> None:
+            if not pending_losses:
+                return
+            self.optimizer.zero_grad(set_to_none=True)
+            combined = torch.stack(pending_losses).mean()
+            combined.backward()
+            self.optimizer.step()
+            with torch.no_grad():
+                for proj in pending_targets:
+                    self.queue.enqueue(proj)
+            pending_losses.clear()
+            pending_targets.clear()
+
         for batch in dataset:
             if isinstance(batch, GridPairBatch):
-                result = self.train_step(batch.context, batch.target)
+                loss_tensor, _, _, target_proj = self._forward_from_grids(batch.context, batch.target)
             elif isinstance(batch, TokenizedPairBatch):
-                result = self.train_step_tokenized(batch)
+                moved = batch.to(self.device, non_blocking=self._use_non_blocking)
+                loss_tensor, _, _, target_proj = self._forward_from_token_batch(moved)
             else:
                 raise TypeError(f"Unsupported batch type: {type(batch)}")
-            total_loss += result.loss
+
+            total_loss += float(loss_tensor.detach().cpu().item())
+            pending_losses.append(loss_tensor)
+            pending_targets.append(target_proj.detach())
             batches += 1
+
+            if len(pending_losses) == self.grad_accum_steps:
+                _apply_pending()
 
         if batches == 0:
             raise ValueError("dataset yielded no batches")
+
+        if pending_losses:
+            _apply_pending()
 
         return total_loss / batches
 

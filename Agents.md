@@ -77,6 +77,8 @@ bd automatically syncs with git:
 - Install dependencies with `uv pip install --python .venv/bin/python -r requirements.txt`.
 - Add `requirements-dev.txt` for tests and `requirements-rl.txt` when working on RLlib training.
 - See `docs/DEPENDENCIES.md` for the authoritative dependency list and update process.
+- Run pytest with `.venv/bin/pytest …` or by activating the venv first (`source .venv/bin/activate && pytest tests/...`).
+- Run pytest with `.venv/bin/pytest …` or by activating the venv first (`source .venv/bin/activate && pytest tests/...`).
 
 ### Python Environment (uv)
 

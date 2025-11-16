@@ -17,6 +17,9 @@ except Exception:  # pragma: no cover
     torch = None  # type: ignore
     Dataset = object  # type: ignore[misc]
 
+from .object_pipeline import ObjectTokenizerConfig
+from training.modules.object_tokenizer import tokenize_grid_objects
+
 
 @dataclass(frozen=True)
 class GridPairBatch:
@@ -68,14 +71,19 @@ class TokenizedPairBatch:
     target_adjacency: "torch.Tensor"
     metadata: Sequence[Mapping[str, object] | None]
 
-    def to(self, device: "torch.device | str") -> "TokenizedPairBatch":  # pragma: no cover - thin wrapper
+    def to(
+        self,
+        device: "torch.device | str",
+        *,
+        non_blocking: bool = False,
+    ) -> "TokenizedPairBatch":  # pragma: no cover - thin wrapper
         return TokenizedPairBatch(
-            context_features=self.context_features.to(device),
-            context_mask=self.context_mask.to(device),
-            context_adjacency=self.context_adjacency.to(device),
-            target_features=self.target_features.to(device),
-            target_mask=self.target_mask.to(device),
-            target_adjacency=self.target_adjacency.to(device),
+            context_features=self.context_features.to(device, non_blocking=non_blocking),
+            context_mask=self.context_mask.to(device, non_blocking=non_blocking),
+            context_adjacency=self.context_adjacency.to(device, non_blocking=non_blocking),
+            target_features=self.target_features.to(device, non_blocking=non_blocking),
+            target_mask=self.target_mask.to(device, non_blocking=non_blocking),
+            target_adjacency=self.target_adjacency.to(device, non_blocking=non_blocking),
             metadata=self.metadata,
         )
 
@@ -425,6 +433,20 @@ def _augment_grid(grid: Grid, config: AugmentationConfig, rng: random.Random) ->
     return Grid(cells)
 
 
+def _apply_grid_augmentations(grid: Grid, config: AugmentationConfig, rng: random.Random) -> Grid:
+    """Apply configured augmentations to a single grid."""
+
+    return _augment_grid(grid, config, rng)
+
+
+def _augment_sequence(
+    sequence: Sequence[Grid],
+    config: AugmentationConfig,
+    rng: random.Random,
+) -> Tuple[Grid, ...]:
+    return tuple(_apply_grid_augmentations(grid, config, rng) for grid in sequence)
+
+
 class InMemoryGridPairDataset:
     """Minimal iterable dataset backed by in-memory grid pairs."""
 
@@ -533,15 +555,125 @@ class ManifestGridPairDataset:
             yield GridPairBatch(context=list(batch_context), target=list(batch_target))
 
     def _apply_augmentations(self, grid: Grid, rng: random.Random) -> Grid:
-        return _augment_grid(grid, self.augmentations, rng)
+        return _apply_grid_augmentations(grid, self.augmentations, rng)
 
     def _augment_context_sequence(
         self,
         sequence: Sequence[Grid],
         rng: random.Random,
     ) -> Tuple[Grid, ...]:
-        return tuple(self._apply_augmentations(grid, rng) for grid in sequence)
+        return _augment_sequence(sequence, self.augmentations, rng)
 
+
+class ManifestTokenizedPairDataset(Dataset):
+    """Manifest-backed dataset that tokenizes grids inside ``__getitem__``."""
+
+    def __init__(
+        self,
+        manifest_path: str | Path,
+        *,
+        context_window: int,
+        target_offset: int = 1,
+        augmentations: AugmentationConfig | Mapping[str, object] | None = None,
+        tokenizer_config: ObjectTokenizerConfig | Mapping[str, object],
+        seed: int | None = None,
+    ) -> None:
+        _ensure_torch_available()
+
+        if context_window <= 0:
+            raise ValueError("context_window must be positive")
+        if target_offset <= 0:
+            raise ValueError("target_offset must be positive")
+
+        self.manifest_path = Path(manifest_path)
+        if not self.manifest_path.exists():
+            raise FileNotFoundError(f"manifest path does not exist: {self.manifest_path}")
+
+        if augmentations is None:
+            self.augmentations = AugmentationConfig()
+        elif isinstance(augmentations, AugmentationConfig):
+            self.augmentations = augmentations
+        else:
+            self.augmentations = AugmentationConfig.from_mapping(augmentations)
+
+        if isinstance(tokenizer_config, ObjectTokenizerConfig):
+            self.tokenizer_config = tokenizer_config
+        else:
+            self.tokenizer_config = ObjectTokenizerConfig.from_mapping(tokenizer_config)
+        self._tokenizer_kwargs = self.tokenizer_config.as_kwargs()
+
+        self.context_window = context_window
+        self.target_offset = target_offset
+        self.context_length = context_window
+        self.max_objects = self.tokenizer_config.max_objects
+        self.feature_dim = self.tokenizer_config.feature_dim
+        self._seed = seed
+
+        self._examples = list(
+            iter_manifest_examples(
+                self.manifest_path,
+                context_window=self.context_window,
+                target_offset=self.target_offset,
+            )
+        )
+        if not self._examples:
+            raise ValueError(f"manifest {self.manifest_path} produced no samples")
+
+    def __len__(self) -> int:
+        return len(self._examples)
+
+    def __getitem__(self, index: int) -> TokenizedPairSample:
+        if index < 0 or index >= len(self._examples):
+            raise IndexError("index out of range")
+
+        example = self._examples[index]
+        if not example.context_sequence:
+            raise ValueError("manifest example is missing temporal context")
+
+        rng = self._rng_for_index(index)
+        context_sequence = _augment_sequence(example.context_sequence, self.augmentations, rng)
+        target_grid = _apply_grid_augmentations(example.target, self.augmentations, rng)
+
+        context_features, context_mask, context_adjacency = self._tokenize_context_sequence(context_sequence)
+        target_features, target_mask, target_adjacency = self._tokenize_grid(target_grid)
+
+        return TokenizedPairSample(
+            context_features=context_features,
+            context_mask=context_mask,
+            context_adjacency=context_adjacency,
+            target_features=target_features,
+            target_mask=target_mask,
+            target_adjacency=target_adjacency,
+            metadata=example.metadata,
+        )
+
+    # ------------------------------------------------------------------ internals
+    def _rng_for_index(self, index: int) -> random.Random:
+        if self._seed is None:
+            base = random.getrandbits(63)
+            return random.Random(base + index)
+
+        worker_info = torch.utils.data.get_worker_info() if torch is not None else None
+        worker_seed = worker_info.seed if worker_info is not None else 0
+        base = int(self._seed) + int(worker_seed)
+        return random.Random(base + index)
+
+    def _tokenize_grid(self, grid: Grid) -> Tuple["torch.Tensor", "torch.Tensor", "torch.Tensor"]:
+        tokens = tokenize_grid_objects(grid, **self._tokenizer_kwargs)
+        features = torch.tensor(tokens.features, dtype=torch.float32)
+        mask = torch.tensor(tokens.mask, dtype=torch.float32)
+        adjacency = torch.tensor(tokens.adjacency, dtype=torch.float32)
+        return features, mask, adjacency
+
+    def _tokenize_context_sequence(
+        self,
+        sequence: Sequence[Grid],
+    ) -> Tuple["torch.Tensor", "torch.Tensor", "torch.Tensor"]:
+        tokenized = [self._tokenize_grid(grid) for grid in sequence]
+        features = torch.stack([entry[0] for entry in tokenized], dim=0)
+        masks = torch.stack([entry[1] for entry in tokenized], dim=0)
+        adjacency = torch.stack([entry[2] for entry in tokenized], dim=0)
+        return features, masks, adjacency
 
 def build_dummy_dataset(num_batches: int = 4, context_length: int = 3) -> InMemoryGridPairDataset:
     grid = Grid([[0, 1], [0, 1]])

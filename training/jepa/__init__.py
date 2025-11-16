@@ -28,6 +28,7 @@ from .dataset import (
     GridPairBatch,
     InMemoryGridPairDataset,
     ManifestGridPairDataset,
+    ManifestTokenizedPairDataset,
     build_dummy_dataset,
 )
 
@@ -45,6 +46,7 @@ __all__ = [
     "GridPairBatch",
     "InMemoryGridPairDataset",
     "ManifestGridPairDataset",
+    "ManifestTokenizedPairDataset",
     "build_object_centric_encoder_from_config",
     "build_object_encoder",
     "build_object_token_batch",

@@ -45,6 +45,19 @@ class ObjectTokenizerConfig:
             "respect_colors": self.respect_colors,
         }
 
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, object] | None) -> "ObjectTokenizerConfig":
+        if data is None:
+            return cls()
+        return cls(
+            max_objects=int(data.get("max_objects", cls.max_objects)),
+            max_color_features=int(data.get("max_color_features", cls.max_color_features)),
+            background=data.get("background", cls.background),
+            connectivity=int(data.get("connectivity", cls.connectivity)),
+            normalize=bool(data.get("normalize", cls.normalize)),
+            respect_colors=bool(data.get("respect_colors", cls.respect_colors)),
+        )
+
 
 @dataclass(frozen=True)
 class ObjectEncoderConfig:
@@ -93,11 +106,16 @@ class ObjectTokenBatch:
     mask: "torch.Tensor"
     adjacency: "torch.Tensor"
 
-    def to(self, device: str | torch.device) -> "ObjectTokenBatch":  # pragma: no cover - thin convenience
+    def to(
+        self,
+        device: str | torch.device,
+        *,
+        non_blocking: bool = False,
+    ) -> "ObjectTokenBatch":  # pragma: no cover - thin convenience
         return ObjectTokenBatch(
-            features=self.features.to(device),
-            mask=self.mask.to(device),
-            adjacency=self.adjacency.to(device),
+            features=self.features.to(device, non_blocking=non_blocking),
+            mask=self.mask.to(device, non_blocking=non_blocking),
+            adjacency=self.adjacency.to(device, non_blocking=non_blocking),
         )
 
 
@@ -184,10 +202,11 @@ class ObjectCentricJEPAEncoder:
         tokens: ObjectTokenBatch,
         *,
         device: "torch.device | None" = None,
+        non_blocking: bool = False,
     ) -> ObjectCentricEncoding:
         _ensure_torch_available()
 
-        batch = tokens if device is None else tokens.to(device)
+        batch = tokens if device is None else tokens.to(device, non_blocking=non_blocking)
         encoder_out = self.encoder(batch.features, mask=batch.mask, adjacency=batch.adjacency)
 
         return ObjectCentricEncoding(
@@ -200,16 +219,9 @@ class ObjectCentricJEPAEncoder:
 
 
 def build_object_tokenizer_config(data: Mapping[str, object] | None) -> ObjectTokenizerConfig:
-    if data is None:
-        return ObjectTokenizerConfig()
-    return ObjectTokenizerConfig(
-        max_objects=int(data.get("max_objects", ObjectTokenizerConfig.max_objects)),
-        max_color_features=int(data.get("max_color_features", ObjectTokenizerConfig.max_color_features)),
-        background=data.get("background", ObjectTokenizerConfig.background),
-        connectivity=int(data.get("connectivity", ObjectTokenizerConfig.connectivity)),
-        normalize=bool(data.get("normalize", ObjectTokenizerConfig.normalize)),
-        respect_colors=bool(data.get("respect_colors", ObjectTokenizerConfig.respect_colors)),
-    )
+    if isinstance(data, ObjectTokenizerConfig):
+        return data
+    return ObjectTokenizerConfig.from_mapping(data)
 
 
 def build_object_encoder(
