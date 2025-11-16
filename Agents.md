@@ -78,15 +78,7 @@ bd automatically syncs with git:
 - Add `requirements-dev.txt` for tests and `requirements-rl.txt` when working on RLlib training.
 - See `docs/DEPENDENCIES.md` for the authoritative dependency list and update process.
 - Run pytest with `.venv/bin/pytest …` or by activating the venv first (`source .venv/bin/activate && pytest tests/...`).
-- Run pytest with `.venv/bin/pytest …` or by activating the venv first (`source .venv/bin/activate && pytest tests/...`).
 
-### Python Environment (uv)
-
-- Create the project virtualenv with `uv venv --python 3.11 .venv`.
-- Activate via `source .venv/bin/activate` (or the platform equivalent) before running commands.
-- Install dependencies with `uv pip install --python .venv/bin/python -r requirements.txt`.
-- Add `requirements-dev.txt` for tests and `requirements-rl.txt` when working on RLlib training.
-- See `docs/DEPENDENCIES.md` for the authoritative dependency list and update process.
 
 ### MCP Server (Recommended)
 
