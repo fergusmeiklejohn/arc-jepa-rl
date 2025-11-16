@@ -135,3 +135,17 @@ def test_target_encoder_ema_and_stop_gradient():
     after = [param.detach().clone() for param in experiment._target_encoder.parameters()]
     assert any(not torch.allclose(prev, curr) for prev, curr in zip(before, after))
     assert all(not param.requires_grad for param in experiment._target_encoder.parameters())
+
+
+def test_amp_flag_falls_back_on_cpu():
+    config = config_with_optimizer()
+    config["training"] = {"amp": True}
+
+    with pytest.warns(RuntimeWarning):
+        experiment = ObjectCentricJEPAExperiment(config, device="cpu")
+
+    assert not experiment._amp_enabled
+
+    context, target = build_sample_batch(experiment.context_length)
+    result = experiment.train_step(context, target)
+    assert isinstance(result.loss, float)

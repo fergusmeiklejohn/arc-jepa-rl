@@ -70,6 +70,7 @@ A **latent codebook** capturing transformation invariants (e.g., â€œreflectionâ€
 - `training/jepa/loop.py` provides `ObjectCentricJEPAExperiment` with optimizer wiring and epoch helpers; `scripts/train_jepa.py --dry-run` exercises the stack.
 - `scripts/train_jepa.py` now drives a `torch.utils.data.DataLoader` around JEPA datasets: manifest samples are tokenized inside `ManifestTokenizedPairDataset` workers, pin-memory transfers use `non_blocking=True`, and `training.num_workers`/`training.pin_memory` knobs tune host-device overlap.
 - When memory is tight, `training.grad_accum_steps` accumulates micro-batches before stepping the optimizer/InfoNCE queue so we can emulate large effective batch sizes without OOMs.
+- Mixed precision is gated behind `training.amp`: enabling it on CUDA boxes wraps encoder/projection/InfoNCE computations in `torch.cuda.amp.autocast` with `GradScaler`, while CPU runs automatically fall back to standard FP32 so configs remain portable.
 - Status update (2025-11-05): projection heads + InfoNCE queue + manifest loader now implemented; synthetic generator + latent option env wired for HRL integration; typed DSL primitives + enumerator + interpreter landed; neural guidance scaffolding (dataset builder, scorer, beam search, training CLI) in place; relational graph attention now backed by configurable multi-head layers in the object encoder.
 
 ---

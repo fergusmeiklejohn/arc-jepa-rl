@@ -42,6 +42,7 @@ training:
   checkpoint_dir: artifacts/jepa/pretrain_gpu
   device: cuda
   drop_last: true
+  amp: true
 
 augmentations:
   mask_ratio: 0.15

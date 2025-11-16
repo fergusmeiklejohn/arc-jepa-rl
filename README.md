@@ -158,6 +158,8 @@ Pass `--device cuda` on GPU boxes. Checkpoints and `metrics.json` land in `artif
 
 For full A6000 runs, start from `configs/training/jepa_pretrain_gpu.yaml`; it sets a larger batch, longer schedule, and defaults to TensorBoard logging under `artifacts/jepa/pretrain_gpu/tensorboard/`.
 
+Mixed precision is controlled via `training.amp` in the config. Set it to `true` on CUDA hosts to enable `torch.cuda.amp` autocast + GradScaler; the loop automatically reverts to FP32 if CUDA/AMP is unavailable (or when forcing `--device cpu`).
+
 **BYOL-style target encoder:** set `loss.use_target_encoder=true` and `loss.target_ema_decay=<0-1]` in the JEPA config to enable a stop-gradient EMA copy of the encoder/projection head. The training loop automatically keeps the target network in sync via EMA updates and routes the contrastive loss through the stabilized branch.
 
 ### Hierarchical option training (RLlib)

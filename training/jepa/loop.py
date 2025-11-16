@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import copy
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Iterable, Mapping, Sequence
+import warnings
 
 from arcgen import Grid
 
@@ -18,6 +20,17 @@ try:  # pragma: no cover - optional
     import torch
 except Exception:  # pragma: no cover
     torch = None  # type: ignore
+
+if torch is not None:  # pragma: no branch
+    try:  # pragma: no cover - CUDA optional on CI
+        from torch.cuda.amp import GradScaler
+        from torch.cuda.amp import autocast as cuda_autocast
+    except Exception:  # pragma: no cover
+        GradScaler = None  # type: ignore
+        cuda_autocast = None  # type: ignore
+else:  # pragma: no cover
+    GradScaler = None  # type: ignore
+    cuda_autocast = None  # type: ignore
 
 
 def _ensure_torch_available() -> None:
@@ -105,8 +118,15 @@ class ObjectCentricJEPAExperiment:
         training_cfg = config.get("training", {})
         if isinstance(training_cfg, Mapping):
             self.grad_accum_steps = max(1, int(training_cfg.get("grad_accum_steps", 1)))
+            self._amp_requested = bool(training_cfg.get("amp", False))
         else:
             self.grad_accum_steps = 1
+            self._amp_requested = False
+
+        self._amp_enabled = False
+        self._grad_scaler: GradScaler | None = None
+        self._amp_dtype = torch.float16
+        self._init_amp_state()
 
         self.trainer = ObjectCentricJEPATrainer(config)
         self.trainer.encoder.to(self.device)
@@ -223,7 +243,7 @@ class ObjectCentricJEPAExperiment:
         logits = logits / temperature
         labels = torch.zeros(logits.size(0), dtype=torch.long, device=logits.device)
 
-        loss = torch.nn.functional.cross_entropy(logits, labels)
+        loss = torch.nn.functional.cross_entropy(logits.float(), labels)
         return loss
 
     def train_step(
@@ -237,18 +257,17 @@ class ObjectCentricJEPAExperiment:
         loss, context_repr, target_repr, target_proj = self._forward_from_grids(context_sequences, target_grids)
 
         self.optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        self.optimizer.step()
+        self._step_optimizer(loss)
         if self._use_target_encoder:
             self._update_target_network()
 
         with torch.no_grad():
-            self.queue.enqueue(target_proj.detach())
+            self.queue.enqueue(self._prepare_queue_projection(target_proj))
 
         return TrainStepResult(
-            loss=float(loss.detach().cpu().item()),
-            encoded_context=context_repr.detach().cpu(),
-            encoded_target=target_repr.detach().cpu(),
+            loss=float(loss.detach().float().cpu().item()),
+            encoded_context=self._tensor_to_cpu(context_repr),
+            encoded_target=self._tensor_to_cpu(target_repr),
         )
 
     def train_step_tokenized(self, batch: TokenizedPairBatch) -> TrainStepResult:
@@ -256,18 +275,17 @@ class ObjectCentricJEPAExperiment:
         loss, context_repr, target_repr, target_proj = self._forward_from_token_batch(token_batch)
 
         self.optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        self.optimizer.step()
+        self._step_optimizer(loss)
         if self._use_target_encoder:
             self._update_target_network()
 
         with torch.no_grad():
-            self.queue.enqueue(target_proj.detach())
+            self.queue.enqueue(self._prepare_queue_projection(target_proj))
 
         return TrainStepResult(
-            loss=float(loss.detach().cpu().item()),
-            encoded_context=context_repr.detach().cpu(),
-            encoded_target=target_repr.detach().cpu(),
+            loss=float(loss.detach().float().cpu().item()),
+            encoded_context=self._tensor_to_cpu(context_repr),
+            encoded_target=self._tensor_to_cpu(target_repr),
         )
 
     def _forward_from_grids(
@@ -275,33 +293,35 @@ class ObjectCentricJEPAExperiment:
         context_sequences: Sequence[Sequence[Grid]],
         target_grids: Sequence[Grid],
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        context_repr = self._encode_context_sequences(context_sequences)
-        context_proj = self.projection_head(context_repr)
+        with self._autocast_context():
+            context_repr = self._encode_context_sequences(context_sequences)
+            context_proj = self.projection_head(context_repr)
 
-        if self._use_target_encoder:
-            with torch.no_grad():
-                target_repr = self._encode_grids(target_grids, object_encoder=self._target_object_encoder)
-            target_proj = self._target_projection_head(target_repr)
-        else:
-            target_repr = self._encode_grids(target_grids)
-            target_proj = self.projection_head(target_repr)
-        loss = self._info_nce_loss(context_proj, target_proj)
+            if self._use_target_encoder:
+                with torch.no_grad():
+                    target_repr = self._encode_grids(target_grids, object_encoder=self._target_object_encoder)
+                target_proj = self._target_projection_head(target_repr)
+            else:
+                target_repr = self._encode_grids(target_grids)
+                target_proj = self.projection_head(target_repr)
+            loss = self._info_nce_loss(context_proj, target_proj)
         return loss, context_repr, target_repr, target_proj
 
     def _forward_from_token_batch(
         self,
         batch: TokenizedPairBatch,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        context_repr = self._encode_tokenized_context(batch)
-        context_proj = self.projection_head(context_repr)
-        if self._use_target_encoder:
-            with torch.no_grad():
-                target_repr = self._encode_tokenized_target(batch, object_encoder=self._target_object_encoder)
-            target_proj = self._target_projection_head(target_repr)
-        else:
-            target_repr = self._encode_tokenized_target(batch)
-            target_proj = self.projection_head(target_repr)
-        loss = self._info_nce_loss(context_proj, target_proj)
+        with self._autocast_context():
+            context_repr = self._encode_tokenized_context(batch)
+            context_proj = self.projection_head(context_repr)
+            if self._use_target_encoder:
+                with torch.no_grad():
+                    target_repr = self._encode_tokenized_target(batch, object_encoder=self._target_object_encoder)
+                target_proj = self._target_projection_head(target_repr)
+            else:
+                target_repr = self._encode_tokenized_target(batch)
+                target_proj = self.projection_head(target_repr)
+            loss = self._info_nce_loss(context_proj, target_proj)
         return loss, context_repr, target_repr, target_proj
 
     def _encode_tokenized_context(
@@ -367,8 +387,7 @@ class ObjectCentricJEPAExperiment:
                 return
             self.optimizer.zero_grad(set_to_none=True)
             combined = torch.stack(pending_losses).mean()
-            combined.backward()
-            self.optimizer.step()
+            self._step_optimizer(combined)
             if self._use_target_encoder:
                 self._update_target_network()
             with torch.no_grad():
@@ -386,9 +405,9 @@ class ObjectCentricJEPAExperiment:
             else:
                 raise TypeError(f"Unsupported batch type: {type(batch)}")
 
-            total_loss += float(loss_tensor.detach().cpu().item())
+            total_loss += float(loss_tensor.detach().float().cpu().item())
             pending_losses.append(loss_tensor)
-            pending_targets.append(target_proj.detach())
+            pending_targets.append(self._prepare_queue_projection(target_proj))
             batches += 1
 
             if len(pending_losses) == self.grad_accum_steps:
@@ -449,3 +468,48 @@ class ObjectCentricJEPAExperiment:
         with torch.no_grad():
             for target_param, online_param in zip(target_module.parameters(), online_module.parameters()):
                 target_param.data.mul_(decay).add_(online_param.data, alpha=1 - decay)
+
+    def _init_amp_state(self) -> None:
+        if torch is None:
+            return
+        if not self._amp_requested:
+            return
+        if self.device.type != "cuda" or not torch.cuda.is_available():
+            warnings.warn(
+                "AMP requested but CUDA device unavailable; falling back to FP32.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return
+        if GradScaler is None or cuda_autocast is None:
+            warnings.warn(
+                "torch.cuda.amp not available; disabling AMP despite training.amp=true",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return
+        self._amp_enabled = True
+        self._grad_scaler = GradScaler()
+
+    def _autocast_context(self):
+        if not self._amp_enabled or cuda_autocast is None:
+            return nullcontext()
+        return cuda_autocast(dtype=self._amp_dtype)
+
+    def _step_optimizer(self, loss: torch.Tensor) -> None:
+        if self._grad_scaler is not None:
+            self._grad_scaler.scale(loss).backward()
+            self._grad_scaler.step(self.optimizer)
+            self._grad_scaler.update()
+        else:
+            loss.backward()
+            self.optimizer.step()
+
+    def _prepare_queue_projection(self, target_proj: torch.Tensor) -> torch.Tensor:
+        proj = target_proj.detach()
+        if proj.dtype != torch.float32:
+            proj = proj.float()
+        return proj
+
+    def _tensor_to_cpu(self, tensor: torch.Tensor) -> torch.Tensor:
+        return tensor.detach().float().cpu()
