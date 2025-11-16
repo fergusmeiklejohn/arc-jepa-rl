@@ -23,6 +23,7 @@ from .loop import (
     OptimizerConfig,
     TrainStepResult,
 )
+from .relational_loss import RelationalConsistencyConfig
 from .invariance import InvarianceLossConfig
 from .dataset import (
     AugmentationConfig,
@@ -44,6 +45,7 @@ __all__ = [
     "ObjectCentricJEPAExperiment",
     "OptimizerConfig",
     "TrainStepResult",
+    "RelationalConsistencyConfig",
     "GridPairBatch",
     "InMemoryGridPairDataset",
     "ManifestGridPairDataset",

@@ -17,8 +17,9 @@ from .invariance import (
     symmetry_flipped_batch,
     translated_batch,
 )
+from .relational_loss import RelationalConsistencyConfig, relational_consistency_loss
 from .trainer import ObjectCentricJEPATrainer
-from .object_pipeline import ObjectCentricJEPAEncoder, ObjectTokenBatch
+from .object_pipeline import ObjectCentricEncoding, ObjectCentricJEPAEncoder, ObjectTokenBatch
 
 from training.modules.projection import InfoNCEQueue, ProjectionHead
 
@@ -142,6 +143,7 @@ class ObjectCentricJEPAExperiment:
             raise ValueError("target_ema_decay must be in (0, 1]")
         self._use_target_encoder = self.loss_config.use_target_encoder
         self.invariance_config = InvarianceLossConfig.from_mapping(config.get("invariance"))
+        self.relational_config = RelationalConsistencyConfig.from_mapping(config.get("relational_loss"))
 
         embedding_dim = self.trainer.encoder_config.hidden_dim
         self.projection_head = ProjectionHead(
@@ -319,19 +321,31 @@ class ObjectCentricJEPAExperiment:
         batch: TokenizedPairBatch,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         with self._autocast_context():
-            context_repr = self._encode_tokenized_context(batch)
+            context_repr, context_encoding = self._encode_tokenized_context(batch, return_encoding=True)  # type: ignore[assignment]
             context_proj = self.projection_head(context_repr)
             if self._use_target_encoder:
                 with torch.no_grad():
-                    target_repr = self._encode_tokenized_target(batch, object_encoder=self._target_object_encoder)
+                    target_repr, target_encoding = self._encode_tokenized_target(
+                        batch,
+                        object_encoder=self._target_object_encoder,
+                        return_encoding=True,
+                    )  # type: ignore[assignment]
                 target_proj = self._target_projection_head(target_repr)
             else:
-                target_repr = self._encode_tokenized_target(batch)
+                target_repr, target_encoding = self._encode_tokenized_target(batch, return_encoding=True)  # type: ignore[assignment]
                 target_proj = self.projection_head(target_repr)
             loss = self._info_nce_loss(context_proj, target_proj)
         invariance_loss = self._token_invariance_loss(batch, context_repr, target_repr)
         if invariance_loss is not None:
             loss = loss + invariance_loss
+        relational_loss = self._relational_consistency_loss(
+            context_encoding,
+            target_encoding,
+            batch_size=batch.context_features.size(0),
+            context_length=batch.context_length,
+        )
+        if relational_loss is not None:
+            loss = loss + relational_loss
         return loss, context_repr, target_repr, target_proj
 
     def _encode_tokenized_context(
@@ -339,7 +353,8 @@ class ObjectCentricJEPAExperiment:
         batch: TokenizedPairBatch,
         *,
         object_encoder: ObjectCentricJEPAEncoder | None = None,
-    ) -> torch.Tensor:
+        return_encoding: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, ObjectCentricEncoding]:
         batch_size = batch.context_features.size(0)
         context_length = batch.context_length
         max_objects = batch.context_features.size(2)
@@ -362,14 +377,18 @@ class ObjectCentricJEPAExperiment:
         )
         per_grid_repr = self._masked_mean(encoding.embeddings, encoding.mask.to(self.device))
         reshaped = per_grid_repr.view(batch_size, context_length, -1)
-        return reshaped.mean(dim=1)
+        aggregated = reshaped.mean(dim=1)
+        if return_encoding:
+            return aggregated, encoding
+        return aggregated
 
     def _encode_tokenized_target(
         self,
         batch: TokenizedPairBatch,
         *,
         object_encoder: ObjectCentricJEPAEncoder | None = None,
-    ) -> torch.Tensor:
+        return_encoding: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, ObjectCentricEncoding]:
         token_batch = ObjectTokenBatch(
             features=batch.target_features,
             mask=batch.target_mask,
@@ -381,7 +400,10 @@ class ObjectCentricJEPAExperiment:
             device=self.device,
             non_blocking=self._use_non_blocking,
         )
-        return self._masked_mean(encoding.embeddings, encoding.mask.to(self.device))
+        aggregated = self._masked_mean(encoding.embeddings, encoding.mask.to(self.device))
+        if return_encoding:
+            return aggregated, encoding
+        return aggregated
 
     def train_epoch(
         self,
@@ -563,4 +585,22 @@ class ObjectCentricJEPAExperiment:
         return torch.nn.functional.mse_loss(context_repr, reference_context) + torch.nn.functional.mse_loss(
             target_repr,
             reference_target,
+        )
+
+    def _relational_consistency_loss(
+        self,
+        context_encoding: ObjectCentricEncoding,
+        target_encoding: ObjectCentricEncoding,
+        *,
+        batch_size: int,
+        context_length: int,
+    ) -> torch.Tensor | None:
+        if not self.relational_config.enabled:
+            return None
+        return relational_consistency_loss(
+            context_encoding,
+            target_encoding,
+            batch_size=batch_size,
+            context_length=context_length,
+            config=self.relational_config,
         )
