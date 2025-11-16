@@ -58,6 +58,24 @@ solver enumerator can rely on the extended registry without regressions.
 
 Each config writes a manifest and `summary.json` to its `output_root`. The generator now accepts `task_schedule` at the config root (or under `generator`) and optional `generator.allowed_primitives` for structural constraints/outlier pockets.
 
+#### Program length curriculum
+
+Control program complexity directly inside the `program` block:
+
+```yaml
+program:
+  max_depth: 4  # optional safety clamp for any phase
+  length_schedule:
+    sequential:   # phase-specific histogram (atomic/sequential or roman numerals)
+      2: 0.5
+      3: 0.3
+      4: 0.2
+    atomic:
+      1: 1.0
+```
+
+Supplying a single mapping (e.g., `{1: 0.4, 2: 0.4, 3: 0.2}`) applies to every phase. Weights are normalised automatically and entries beyond `max_depth` are dropped. The generator stores the sampled `program_length` per task, and `summary.json` now reports both descriptive stats and a literal `program_length_histogram` to verify the curriculum.
+
 Evaluate a manifest to sanity-check solve rates and program counts:
 
 ```bash

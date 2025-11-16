@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterator, List, Mapping, MutableMapping, Sequence
+from typing import Callable, Dict, Iterator, List, Mapping, MutableMapping, Sequence
 
 from . import Grid, PRIMITIVE_REGISTRY, SeededRNG
 from .primitives import PrimitiveSpec
@@ -15,6 +15,106 @@ PHASE_CODES: Mapping[str, str] = {
     "atomic": "I",
     "sequential": "II",
 }
+
+PHASE_ALIASES: Mapping[str, str] = {code.lower(): phase for phase, code in PHASE_CODES.items()}
+
+
+class ProgramLengthSampler:
+    """Samples program lengths based on user-specified schedules."""
+
+    def __init__(
+        self,
+        schedule: Mapping[str, object] | Mapping[int, float] | None,
+        max_length: int | None,
+    ) -> None:
+        self._max_length = None
+        if max_length is not None:
+            value = int(max_length)
+            if value <= 0:
+                raise ValueError("max_program_length must be positive")
+            self._max_length = value
+
+        self._default_schedule: List[tuple[int, float]] | None = None
+        self._per_phase_schedule: Dict[str, List[tuple[int, float]]] = {}
+
+        if schedule:
+            self._configure_schedule(schedule)
+
+    def sample_length(self, phase: str, rng: SeededRNG, fallback: Callable[[], int]) -> int:
+        key = phase.lower()
+        schedule = self._per_phase_schedule.get(key) or self._default_schedule
+        if schedule is not None:
+            return self._draw(schedule, rng)
+        return self._apply_max(fallback())
+
+    def _configure_schedule(self, schedule: Mapping[str, object] | Mapping[int, float]) -> None:
+        items = list(schedule.items())
+        if not items:
+            raise ValueError("program length schedule cannot be empty")
+
+        value_is_mapping = [isinstance(value, Mapping) for _, value in items]
+        if all(value_is_mapping):
+            for raw_key, distribution in schedule.items():
+                assert isinstance(distribution, Mapping)
+                key = self._normalize_phase_key(raw_key)
+                normalized = self._build_distribution(distribution)
+                if key in {"default", "__default__", "*", "all"}:
+                    self._default_schedule = normalized
+                else:
+                    self._per_phase_schedule[key] = normalized
+            return
+
+        if any(value_is_mapping):
+            raise ValueError(
+                "length schedule must map entirely to weights or to nested distributions",
+            )
+
+        self._default_schedule = self._build_distribution(schedule)
+
+    def _normalize_phase_key(self, key: object) -> str:
+        normalized = str(key).strip().lower()
+        return PHASE_ALIASES.get(normalized, normalized)
+
+    def _build_distribution(self, distribution: Mapping[object, object]) -> List[tuple[int, float]]:
+        entries: List[tuple[int, float]] = []
+        for length, weight in distribution.items():
+            try:
+                value = int(length)
+            except (TypeError, ValueError) as exc:  # pragma: no cover - user config error
+                raise ValueError("program lengths must be integers") from exc
+            if value <= 0:
+                raise ValueError("program lengths must be positive")
+
+            magnitude = float(weight)
+            if magnitude <= 0:
+                continue
+            if self._max_length is not None and value > self._max_length:
+                continue
+            entries.append((value, magnitude))
+
+        if not entries:
+            raise ValueError("length schedule must include at least one positive-weight entry")
+
+        total = sum(weight for _, weight in entries)
+        cumulative = 0.0
+        normalized: List[tuple[int, float]] = []
+        for value, weight in entries:
+            cumulative += weight / total
+            normalized.append((value, min(cumulative, 1.0)))
+        normalized[-1] = (normalized[-1][0], 1.0)
+        return normalized
+
+    def _draw(self, schedule: List[tuple[int, float]], rng: SeededRNG) -> int:
+        sample = rng.random()
+        for value, threshold in schedule:
+            if sample <= threshold:
+                return value
+        return schedule[-1][0]
+
+    def _apply_max(self, length: int) -> int:
+        if self._max_length is None:
+            return length
+        return min(length, self._max_length)
 
 
 @dataclass(frozen=True)
@@ -88,10 +188,13 @@ class SyntheticARCGenerator:
         *,
         seed: int | None = None,
         allowed_primitives: Sequence[str] | None = None,
+        program_length_schedule: Mapping[str, object] | Mapping[int, float] | None = None,
+        max_program_length: int | None = None,
     ) -> None:
         self.config = config or GeneratorConfig()
         self._rng = SeededRNG(seed)
         self._counter = 0
+        self._length_sampler = ProgramLengthSampler(program_length_schedule, max_program_length)
 
         all_specs = PRIMITIVE_REGISTRY.list()
         if allowed_primitives is not None:
@@ -198,13 +301,15 @@ class SyntheticARCGenerator:
 
     def _sample_program_specs(self, phase: str) -> List[PrimitiveSpec]:
         rng = self._rng
-        if phase == "atomic":
-            length = 1
-        elif phase == "sequential":
-            length = rng.randint(2, 3)
-        else:  # pragma: no cover - guarded by caller
-            raise ValueError(f"unsupported phase '{phase}'")
 
+        def fallback() -> int:
+            if phase == "atomic":
+                return 1
+            if phase == "sequential":
+                return rng.randint(2, 3)
+            raise ValueError(f"unsupported phase '{phase}'")  # pragma: no cover
+
+        length = self._length_sampler.sample_length(phase, rng, fallback)
         return [rng.choice(self._primitive_pool) for _ in range(length)]
 
     # --------------------------------------------------------------- sampling

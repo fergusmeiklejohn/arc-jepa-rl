@@ -32,6 +32,12 @@ class ExportOptions:
     cell_size: int = 20
 
 
+@dataclass
+class ProgramOptions:
+    max_depth: int | None = None
+    length_schedule: Mapping[str, Mapping[int, float]] | Mapping[int, float] | None = None
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate synthetic ARC data")
     parser.add_argument("--config", type=Path, required=True, help="Path to YAML config")
@@ -163,13 +169,81 @@ def build_output_root(args: argparse.Namespace, config: Mapping) -> Path:
     return Path(output_root)
 
 
+def parse_program_options(config: Mapping) -> ProgramOptions:
+    program_cfg = config.get("program")
+    if not isinstance(program_cfg, Mapping):
+        return ProgramOptions()
+
+    max_depth = program_cfg.get("max_depth")
+    if max_depth is not None:
+        max_depth = int(max_depth)
+        if max_depth <= 0:
+            raise ValueError("program.max_depth must be positive")
+
+    length_schedule = program_cfg.get("length_schedule")
+    if length_schedule is None:
+        return ProgramOptions(max_depth=max_depth)
+    if not isinstance(length_schedule, Mapping):
+        raise ValueError("program.length_schedule must be a mapping")
+
+    normalized_schedule = _normalize_length_schedule(length_schedule)
+    return ProgramOptions(max_depth=max_depth, length_schedule=normalized_schedule)
+
+
+def _normalize_length_schedule(
+    schedule: Mapping,
+) -> Mapping[str, Mapping[int, float]] | Mapping[int, float]:
+    items = list(schedule.items())
+    if not items:
+        raise ValueError("program.length_schedule cannot be empty")
+
+    values_are_mappings = [isinstance(value, Mapping) for _, value in items]
+    if all(values_are_mappings):
+        normalized: Dict[str, Dict[int, float]] = {}
+        for key, distribution in schedule.items():
+            if not isinstance(distribution, Mapping):
+                raise ValueError("nested program length schedules must be mappings")
+            normalized[str(key).strip().lower()] = _normalize_distribution(distribution)
+        return normalized
+
+    if any(values_are_mappings):
+        raise ValueError(
+            "program.length_schedule must either map phases to schedules or lengths to weights",
+        )
+
+    return _normalize_distribution(schedule)
+
+
+def _normalize_distribution(distribution: Mapping) -> Dict[int, float]:
+    normalized: Dict[int, float] = {}
+    for length, weight in distribution.items():
+        try:
+            length_value = int(length)
+        except (TypeError, ValueError) as exc:  # pragma: no cover - defensive guard
+            raise ValueError("program length keys must be integers") from exc
+        if length_value <= 0:
+            raise ValueError("program lengths must be positive")
+
+        weight_value = float(weight)
+        if weight_value <= 0:
+            continue
+        normalized[length_value] = weight_value
+
+    if not normalized:
+        raise ValueError("program length schedule must contain positive weights")
+    return normalized
+
+
 def generate_tasks(config: Mapping) -> Sequence[SyntheticTask]:
     generator_config = build_generator_config(config)
     allowed_primitives = extract_allowed_primitives(config)
+    program_options = parse_program_options(config)
     generator = SyntheticARCGenerator(
         generator_config,
         seed=config.get("seed"),
         allowed_primitives=allowed_primitives,
+        program_length_schedule=program_options.length_schedule,
+        max_program_length=program_options.max_depth,
     )
     schedule = extract_schedule(config)
 
@@ -267,6 +341,7 @@ def describe(values: Iterable[int]) -> Dict[str, float]:
 def summarise(tasks: Sequence[SyntheticTask]) -> Dict[str, object]:
     palette_counts = Counter()
     program_lengths = []
+    program_histogram = Counter()
     changed_cells: list[int] = []
     heights = []
     widths = []
@@ -276,7 +351,9 @@ def summarise(tasks: Sequence[SyntheticTask]) -> Dict[str, object]:
         metadata = task.metadata or {}
         palette = metadata.get("palette") or task.input_grid.palette()
         palette_counts[len(palette)] += 1
-        program_lengths.append(len(task.rule_trace))
+        length = len(task.rule_trace)
+        program_lengths.append(length)
+        program_histogram[length] += 1
         changed = metadata.get("changed_cells")
         if isinstance(changed, int):
             changed_cells.append(changed)
@@ -289,6 +366,7 @@ def summarise(tasks: Sequence[SyntheticTask]) -> Dict[str, object]:
         "phases": dict(phase_counts),
         "palette_size_counts": dict(palette_counts),
         "program_length": describe(program_lengths),
+        "program_length_histogram": {length: program_histogram[length] for length in sorted(program_histogram)},
         "changed_cells": describe(changed_cells),
         "grid_height": describe(heights),
         "grid_width": describe(widths),

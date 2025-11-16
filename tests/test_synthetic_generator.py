@@ -1,7 +1,8 @@
 from arcgen import GeneratorConfig, SyntheticARCGenerator, SyntheticTask
+from scripts.generate_dataset import summarise
 
 
-def build_generator(seed: int = 7) -> SyntheticARCGenerator:
+def build_generator(seed: int = 7, **kwargs) -> SyntheticARCGenerator:
     config = GeneratorConfig(
         min_grid_size=5,
         max_grid_size=6,
@@ -11,7 +12,7 @@ def build_generator(seed: int = 7) -> SyntheticARCGenerator:
         max_parameter_retries=10,
         max_task_retries=20,
     )
-    return SyntheticARCGenerator(config, seed=seed)
+    return SyntheticARCGenerator(config, seed=seed, **kwargs)
 
 
 def test_atomic_generation_produces_single_rule():
@@ -46,3 +47,32 @@ def test_jsonl_export_round_trip(tmp_path):
     contents = destination.read_text(encoding="utf-8").strip().splitlines()
     assert len(contents) == 2
     assert all('"rule_trace"' in line for line in contents)
+
+
+def test_program_length_schedule_respected():
+    generator = build_generator(
+        seed=17,
+        program_length_schedule={"sequential": {4: 1.0}},
+    )
+
+    task = generator.sample_task("sequential")
+    assert len(task.rule_trace) == 4
+    assert task.metadata["program_length"] == 4
+
+
+def test_program_max_depth_limits_lengths():
+    generator = build_generator(seed=19, max_program_length=2)
+
+    tasks = [generator.sample_task("sequential") for _ in range(3)]
+    assert all(len(task.rule_trace) <= 2 for task in tasks)
+
+
+def test_summary_includes_program_histogram():
+    generator = build_generator(
+        seed=23,
+        program_length_schedule={"sequential": {3: 1.0}},
+    )
+    tasks = [generator.sample_task("sequential") for _ in range(3)]
+
+    summary = summarise(tasks)
+    assert summary["program_length_histogram"] == {3: 3}
