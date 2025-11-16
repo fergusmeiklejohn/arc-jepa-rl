@@ -178,6 +178,14 @@ PYTHONPATH=. .venv/bin/python scripts/train_hierarchical.py \
 
 The sample config wires RLlib into `ArcLatentOptionEnv`, loads JEPA encoder settings via `jepa_config_path`, and exposes knobs for reward shaping, curriculum schedules, and PPO hyper-parameters. Metrics plus the final checkpoint path are stored under the chosen output directory.
 
+#### Mining RL traces for new options
+
+1. Collect rollouts (random or trained policies) with `scripts/rollout_latent_env.py --env-config configs/training/rl/latent_rollout_env.yaml --jepa-config <jepa.yaml> --episodes 100 --output data/latent_option_traces.jsonl`. Each step now records the exact `grid_before`/`grid_after` pairs required for replay.
+2. Extract candidate macros via `python scripts/discover_options.py --env-config configs/training/rl/latent_rollout_env.yaml --traces data/latent_option_traces.jsonl --output artifacts/options/discovered.json --min-support 3 --max-length 3`.
+3. (Optional) Pass `--promote` to validate registration in the DSL registry; the JSON summary lists each auto-named primitive and its underlying option sequence so you can wire them into future solver runs.
+
+`training/options/traces.py` exposes `load_option_episodes_from_traces(...)` if you want to plug the mined episodes directly into the few-shot solver or custom discovery logic.
+
 > This project is under active development. Consult the blueprint documents for
 > the full roadmap and open Beads issues for next steps.
 

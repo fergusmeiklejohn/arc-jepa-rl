@@ -115,18 +115,20 @@ def main() -> None:
                 action = random.randrange(env.action_space_n)
                 next_grid, reward, done, info = env.step(action)
                 episode_reward += reward
-                step_record = {
-                    "observation": obs,
-                    "action": int(action),
-                    "option_name": info.get("option"),
-                    "reward": float(reward),
-                    "success": bool(info.get("success")),
-                    "termination": bool(info.get("success")) if info.get("success") is not None else None,
-                }
-                steps.append(step_record)
+            step_record = {
+                "observation": obs,
+                "action": int(action),
+                "option_name": info.get("option"),
+                "reward": float(reward),
+                "success": bool(info.get("success")),
+                "termination": bool(info.get("success")) if info.get("success") is not None else None,
+                "grid_before": current_grid.to_lists(),
+                "grid_after": next_grid.to_lists(),
+            }
+            steps.append(step_record)
 
-                obs = _build_observation(next_grid, task.output_grid, env.steps, pad, background)
-                current_grid = next_grid
+            obs = _build_observation(next_grid, task.output_grid, env.steps, pad, background)
+            current_grid = next_grid
 
             episode = {
                 "task_id": task.task_id,

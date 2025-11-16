@@ -7,6 +7,7 @@ from .discovery import (
     discover_option_sequences,
 )
 from .promotion import promote_discovered_option
+from .traces import load_option_episodes_from_traces
 
 __all__ = [
     "DiscoveredOption",
@@ -14,5 +15,5 @@ __all__ = [
     "OptionEpisode",
     "discover_option_sequences",
     "promote_discovered_option",
+    "load_option_episodes_from_traces",
 ]
-
