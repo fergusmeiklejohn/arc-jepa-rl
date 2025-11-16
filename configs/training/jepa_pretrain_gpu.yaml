@@ -64,6 +64,13 @@ loss:
   projection_layers: 2
   projection_activation: "relu"
 
+invariance:
+  color_weight: 0.1
+  translation_weight: 0.05
+  translation_max_delta: 0.05
+  symmetry_weight: 0.05
+  symmetry_modes: ["horizontal", "vertical"]
+
 logging:
   enabled: true
   log_dir: artifacts/jepa/pretrain_gpu/tensorboard

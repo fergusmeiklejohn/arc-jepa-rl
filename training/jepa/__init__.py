@@ -23,6 +23,7 @@ from .loop import (
     OptimizerConfig,
     TrainStepResult,
 )
+from .invariance import InvarianceLossConfig
 from .dataset import (
     AugmentationConfig,
     GridPairBatch,
@@ -51,6 +52,7 @@ __all__ = [
     "build_object_encoder",
     "build_object_token_batch",
     "build_object_tokenizer_config",
+    "InvarianceLossConfig",
     "build_trainer_from_config",
     "build_trainer_from_file",
     "build_dummy_dataset",

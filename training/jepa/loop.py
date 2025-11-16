@@ -11,6 +11,12 @@ import warnings
 from arcgen import Grid
 
 from .dataset import GridPairBatch, InMemoryGridPairDataset, TokenizedPairBatch
+from .invariance import (
+    InvarianceLossConfig,
+    color_permuted_batch,
+    symmetry_flipped_batch,
+    translated_batch,
+)
 from .trainer import ObjectCentricJEPATrainer
 from .object_pipeline import ObjectCentricJEPAEncoder, ObjectTokenBatch
 
@@ -135,6 +141,7 @@ class ObjectCentricJEPAExperiment:
         if not 0.0 < self.loss_config.target_ema_decay <= 1.0:
             raise ValueError("target_ema_decay must be in (0, 1]")
         self._use_target_encoder = self.loss_config.use_target_encoder
+        self.invariance_config = InvarianceLossConfig.from_mapping(config.get("invariance"))
 
         embedding_dim = self.trainer.encoder_config.hidden_dim
         self.projection_head = ProjectionHead(
@@ -322,6 +329,9 @@ class ObjectCentricJEPAExperiment:
                 target_repr = self._encode_tokenized_target(batch)
                 target_proj = self.projection_head(target_repr)
             loss = self._info_nce_loss(context_proj, target_proj)
+        invariance_loss = self._token_invariance_loss(batch, context_repr, target_repr)
+        if invariance_loss is not None:
+            loss = loss + invariance_loss
         return loss, context_repr, target_repr, target_proj
 
     def _encode_tokenized_context(
@@ -513,3 +523,44 @@ class ObjectCentricJEPAExperiment:
 
     def _tensor_to_cpu(self, tensor: torch.Tensor) -> torch.Tensor:
         return tensor.detach().float().cpu()
+
+    def _token_invariance_loss(
+        self,
+        batch: TokenizedPairBatch,
+        context_repr: torch.Tensor,
+        target_repr: torch.Tensor,
+    ) -> torch.Tensor | None:
+        cfg = self.invariance_config
+        if not cfg.enabled:
+            return None
+
+        penalties: list[torch.Tensor] = []
+
+        if cfg.color_weight > 0.0:
+            augmented = color_permuted_batch(batch, cfg)
+            penalties.append(cfg.color_weight * self._invariance_distance(augmented, context_repr, target_repr))
+
+        if cfg.translation_weight > 0.0 and cfg.translation_max_delta > 0.0:
+            translated = translated_batch(batch, cfg)
+            penalties.append(cfg.translation_weight * self._invariance_distance(translated, context_repr, target_repr))
+
+        if cfg.symmetry_weight > 0.0 and cfg.symmetry_modes:
+            flipped = symmetry_flipped_batch(batch, cfg)
+            penalties.append(cfg.symmetry_weight * self._invariance_distance(flipped, context_repr, target_repr))
+
+        if not penalties:
+            return None
+        return torch.stack(penalties).sum()
+
+    def _invariance_distance(
+        self,
+        batch: TokenizedPairBatch,
+        reference_context: torch.Tensor,
+        reference_target: torch.Tensor,
+    ) -> torch.Tensor:
+        context_repr = self._encode_tokenized_context(batch)
+        target_repr = self._encode_tokenized_target(batch)
+        return torch.nn.functional.mse_loss(context_repr, reference_context) + torch.nn.functional.mse_loss(
+            target_repr,
+            reference_target,
+        )

@@ -60,6 +60,7 @@ Train an **object-centric Context-Target JEPA** to predict latent changes betwee
 - **Vector-quantized encoder**: projects object tokens through an MLP + VQ-VAE bottleneck to encourage crisp, reusable codes (`training/modules/vq.py`)
 - **Relational attention heads**: multi-layer adjacency-aware self-attention stack over object tokens (`training/modules/relational.py`) for symmetry and counting.
 - **Joint embedding predictive loss** (contrastive/multi-step InfoNCE) computed on mean-pooled object embeddings; future work adds relational consistency losses.
+- **Invariance penalties** now configurable via `training.invariance` weights (color permutations, translations, horizontal/vertical symmetries) so JEPA learns coordinate- and palette-stable encodings before downstream use.
 - Invariance constraints for symmetry, color permutation, translation.
 
 ### Expected Outcome
