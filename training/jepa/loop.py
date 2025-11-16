@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from typing import Iterable, Mapping, Sequence
 
@@ -9,7 +10,7 @@ from arcgen import Grid
 
 from .dataset import GridPairBatch, InMemoryGridPairDataset, TokenizedPairBatch
 from .trainer import ObjectCentricJEPATrainer
-from .object_pipeline import ObjectTokenBatch
+from .object_pipeline import ObjectCentricJEPAEncoder, ObjectTokenBatch
 
 from training.modules.projection import InfoNCEQueue, ProjectionHead
 
@@ -48,6 +49,8 @@ class InfoNCELossConfig:
     projection_dim: int = 256
     projection_layers: int = 2
     projection_activation: str = "relu"
+    use_target_encoder: bool = False
+    target_ema_decay: float = 0.99
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, object] | None) -> "InfoNCELossConfig":
@@ -64,6 +67,8 @@ class InfoNCELossConfig:
             projection_dim=int(data.get("projection_dim", cls.projection_dim)),
             projection_layers=int(data.get("projection_layers", cls.projection_layers)),
             projection_activation=str(data.get("projection_activation", cls.projection_activation)),
+            use_target_encoder=bool(data.get("use_target_encoder", cls.use_target_encoder)),
+            target_ema_decay=float(data.get("target_ema_decay", cls.target_ema_decay)),
         )
 
 
@@ -107,6 +112,9 @@ class ObjectCentricJEPAExperiment:
         self.trainer.encoder.to(self.device)
 
         self.loss_config = InfoNCELossConfig.from_mapping(config.get("loss"))
+        if not 0.0 < self.loss_config.target_ema_decay <= 1.0:
+            raise ValueError("target_ema_decay must be in (0, 1]")
+        self._use_target_encoder = self.loss_config.use_target_encoder
 
         embedding_dim = self.trainer.encoder_config.hidden_dim
         self.projection_head = ProjectionHead(
@@ -115,6 +123,11 @@ class ObjectCentricJEPAExperiment:
             layers=self.loss_config.projection_layers,
             activation=self.loss_config.projection_activation,
         ).to(self.device)
+        self._target_encoder = None
+        self._target_object_encoder = None
+        self._target_projection_head = None
+        if self._use_target_encoder:
+            self._build_target_network()
 
         self.queue = InfoNCEQueue(
             embedding_dim=self.loss_config.projection_dim,
@@ -226,6 +239,8 @@ class ObjectCentricJEPAExperiment:
         self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
         self.optimizer.step()
+        if self._use_target_encoder:
+            self._update_target_network()
 
         with torch.no_grad():
             self.queue.enqueue(target_proj.detach())
@@ -243,6 +258,8 @@ class ObjectCentricJEPAExperiment:
         self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
         self.optimizer.step()
+        if self._use_target_encoder:
+            self._update_target_network()
 
         with torch.no_grad():
             self.queue.enqueue(target_proj.detach())
@@ -259,11 +276,15 @@ class ObjectCentricJEPAExperiment:
         target_grids: Sequence[Grid],
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         context_repr = self._encode_context_sequences(context_sequences)
-        target_encoding = self.trainer.object_encoder.encode(target_grids, device=self.device)
-        target_repr = self._masked_mean(target_encoding.embeddings, target_encoding.mask.to(self.device))
-
         context_proj = self.projection_head(context_repr)
-        target_proj = self.projection_head(target_repr)
+
+        if self._use_target_encoder:
+            with torch.no_grad():
+                target_repr = self._encode_grids(target_grids, object_encoder=self._target_object_encoder)
+            target_proj = self._target_projection_head(target_repr)
+        else:
+            target_repr = self._encode_grids(target_grids)
+            target_proj = self.projection_head(target_repr)
         loss = self._info_nce_loss(context_proj, target_proj)
         return loss, context_repr, target_repr, target_proj
 
@@ -272,13 +293,23 @@ class ObjectCentricJEPAExperiment:
         batch: TokenizedPairBatch,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         context_repr = self._encode_tokenized_context(batch)
-        target_repr = self._encode_tokenized_target(batch)
         context_proj = self.projection_head(context_repr)
-        target_proj = self.projection_head(target_repr)
+        if self._use_target_encoder:
+            with torch.no_grad():
+                target_repr = self._encode_tokenized_target(batch, object_encoder=self._target_object_encoder)
+            target_proj = self._target_projection_head(target_repr)
+        else:
+            target_repr = self._encode_tokenized_target(batch)
+            target_proj = self.projection_head(target_repr)
         loss = self._info_nce_loss(context_proj, target_proj)
         return loss, context_repr, target_repr, target_proj
 
-    def _encode_tokenized_context(self, batch: TokenizedPairBatch) -> torch.Tensor:
+    def _encode_tokenized_context(
+        self,
+        batch: TokenizedPairBatch,
+        *,
+        object_encoder: ObjectCentricJEPAEncoder | None = None,
+    ) -> torch.Tensor:
         batch_size = batch.context_features.size(0)
         context_length = batch.context_length
         max_objects = batch.context_features.size(2)
@@ -293,7 +324,8 @@ class ObjectCentricJEPAExperiment:
             mask=flattened_mask,
             adjacency=flattened_adj,
         )
-        encoding = self.trainer.object_encoder.encode_tokens(
+        encoder = object_encoder or self.trainer.object_encoder
+        encoding = encoder.encode_tokens(
             token_batch,
             device=self.device,
             non_blocking=self._use_non_blocking,
@@ -302,13 +334,19 @@ class ObjectCentricJEPAExperiment:
         reshaped = per_grid_repr.view(batch_size, context_length, -1)
         return reshaped.mean(dim=1)
 
-    def _encode_tokenized_target(self, batch: TokenizedPairBatch) -> torch.Tensor:
+    def _encode_tokenized_target(
+        self,
+        batch: TokenizedPairBatch,
+        *,
+        object_encoder: ObjectCentricJEPAEncoder | None = None,
+    ) -> torch.Tensor:
         token_batch = ObjectTokenBatch(
             features=batch.target_features,
             mask=batch.target_mask,
             adjacency=batch.target_adjacency,
         )
-        encoding = self.trainer.object_encoder.encode_tokens(
+        encoder = object_encoder or self.trainer.object_encoder
+        encoding = encoder.encode_tokens(
             token_batch,
             device=self.device,
             non_blocking=self._use_non_blocking,
@@ -331,6 +369,8 @@ class ObjectCentricJEPAExperiment:
             combined = torch.stack(pending_losses).mean()
             combined.backward()
             self.optimizer.step()
+            if self._use_target_encoder:
+                self._update_target_network()
             with torch.no_grad():
                 for proj in pending_targets:
                     self.queue.enqueue(proj)
@@ -375,3 +415,37 @@ class ObjectCentricJEPAExperiment:
             epoch_loss = self.train_epoch(dataset)
             losses.append(epoch_loss)
         return losses
+
+    def _encode_grids(
+        self,
+        grids: Sequence[Grid],
+        *,
+        object_encoder: ObjectCentricJEPAEncoder | None = None,
+    ) -> torch.Tensor:
+        encoder = object_encoder or self.trainer.object_encoder
+        encoding = encoder.encode(grids, device=self.device)
+        return self._masked_mean(encoding.embeddings, encoding.mask.to(self.device))
+
+    def _build_target_network(self) -> None:
+        encoder_copy = copy.deepcopy(self.trainer.encoder).to(self.device)
+        for param in encoder_copy.parameters():
+            param.requires_grad_(False)
+        self._target_encoder = encoder_copy
+        self._target_object_encoder = ObjectCentricJEPAEncoder(encoder_copy, self.trainer.tokenizer_config)
+
+        projection_copy = copy.deepcopy(self.projection_head).to(self.device)
+        for param in projection_copy.parameters():
+            param.requires_grad_(False)
+        self._target_projection_head = projection_copy
+
+    def _update_target_network(self) -> None:
+        if not self._use_target_encoder or self._target_encoder is None or self._target_projection_head is None:
+            return
+        decay = self.loss_config.target_ema_decay
+        self._ema_update(self._target_encoder, self.trainer.encoder, decay)
+        self._ema_update(self._target_projection_head, self.projection_head, decay)
+
+    def _ema_update(self, target_module: torch.nn.Module, online_module: torch.nn.Module, decay: float) -> None:
+        with torch.no_grad():
+            for target_param, online_param in zip(target_module.parameters(), online_module.parameters()):
+                target_param.data.mul_(decay).add_(online_param.data, alpha=1 - decay)

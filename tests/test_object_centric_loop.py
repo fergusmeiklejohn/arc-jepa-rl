@@ -116,3 +116,22 @@ def test_experiment_train_epoch_with_manifest(tmp_path):
 
     loss = experiment.train_epoch(dataset)
     assert isinstance(loss, float)
+
+
+def test_target_encoder_ema_and_stop_gradient():
+    config = config_with_optimizer()
+    config["loss"] = {"use_target_encoder": True, "target_ema_decay": 0.5}
+    experiment = ObjectCentricJEPAExperiment(config)
+
+    assert experiment._use_target_encoder
+    assert experiment._target_encoder is not None
+
+    context, target = build_sample_batch(experiment.context_length)
+    before = [param.detach().clone() for param in experiment._target_encoder.parameters()]
+
+    result = experiment.train_step(context, target)
+    assert isinstance(result.loss, float)
+
+    after = [param.detach().clone() for param in experiment._target_encoder.parameters()]
+    assert any(not torch.allclose(prev, curr) for prev, curr in zip(before, after))
+    assert all(not param.requires_grad for param in experiment._target_encoder.parameters())
