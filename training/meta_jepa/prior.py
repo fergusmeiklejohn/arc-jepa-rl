@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from typing import Iterable, Mapping
+from typing import Iterable, Mapping, Tuple
 
 try:  # pragma: no cover - optional dependency
     import torch
@@ -38,7 +38,12 @@ class MetaJEPAPrior:
         self.dataset = trainer.dataset
 
         features = trainer.dataset.features.to(self.device)
-        self._reference_embeddings = trainer.encode(features, device=str(self.device))
+        adjacency = trainer.dataset.adjacency.to(self.device)
+        self._reference_embeddings = trainer.encode(
+            features,
+            adjacency=adjacency,
+            device=str(self.device),
+        )
         self._reference_embeddings = self._reference_embeddings.to(self.device)
         self._examples = trainer.dataset.examples
 
@@ -58,8 +63,18 @@ class MetaJEPAPrior:
             return 0.0
 
         changed = count_changed_cells(context, candidate)
-        features = self._encode_features(counts, changed_cells=float(changed), program_length=float(len(program)))
-        embedding = self.trainer.encode(features.unsqueeze(0), device=str(self.device)).squeeze(0)
+        features, adjacency = self._encode_features(
+            counts,
+            changed_cells=float(changed),
+            program_length=float(len(program)),
+            program=program,
+        )
+        adjacency_tensor = adjacency.unsqueeze(0) if adjacency is not None else None
+        embedding = self.trainer.encode(
+            features.unsqueeze(0),
+            adjacency=adjacency_tensor,
+            device=str(self.device),
+        ).squeeze(0)
         embedding = embedding.to(self.device)
 
         similarities = torch.matmul(self._reference_embeddings, embedding)
@@ -100,14 +115,56 @@ class MetaJEPAPrior:
         changed_cells: float,
         program_length: float,
         family_size: float = 1.0,
-    ) -> Tensor:
+        program=None,
+    ) -> Tuple[Tensor, Tensor | None]:
         primitive_vec = self.vocabulary.encode(counts).to(self.device)
         stats = torch.tensor(
             [float(program_length), float(changed_cells), float(family_size)],
             dtype=torch.float32,
             device=self.device,
         )
-        return torch.cat([primitive_vec, stats], dim=0)
+        features = torch.cat([primitive_vec, stats], dim=0)
+        adjacency = self._build_program_adjacency(program) if program is not None else None
+        return features, adjacency
+
+    def _build_program_adjacency(self, program) -> Tensor | None:
+        from training.dsl.enumerator import Program  # local import to avoid cycle
+
+        if torch is None or not isinstance(program, Program):
+            return None
+
+        size = len(self.vocabulary)
+        adjacency = torch.zeros((size, size), dtype=torch.float32, device=self.device)
+
+        def _index(name: str) -> int | None:
+            try:
+                return self.vocabulary.index(name)
+            except KeyError:
+                return None
+
+        for expr in program.traverse():
+            primitive = getattr(expr, "primitive", None)
+            if primitive is None:
+                continue
+            src_idx = _index(primitive.name)
+            if src_idx is None:
+                continue
+            adjacency[src_idx, src_idx] = 1.0
+            for child in getattr(expr, "args", ()):  # type: ignore[attr-defined]
+                child_primitive = getattr(child, "primitive", None)
+                if child_primitive is None:
+                    continue
+                dst_idx = _index(child_primitive.name)
+                if dst_idx is None:
+                    continue
+                adjacency[src_idx, dst_idx] += 1.0
+                adjacency[dst_idx, src_idx] += 1.0
+
+        total = float(adjacency.sum().item())
+        if total > 0:
+            adjacency = adjacency / total
+            return adjacency
+        return None
 
 
 __all__ = ["MetaJEPAPrior"]

@@ -40,11 +40,17 @@ def test_meta_jepa_trainer_fit_and_encode():
     assert all(loss >= 0 for loss in result.history)
     assert pytest.approx(result.temperature, rel=1e-5) == 0.5
 
+    vocab_size = len(trainer.vocabulary)
+    assert trainer.dataset.adjacency.shape == (len(trainer.dataset), vocab_size, vocab_size)
+
     features = trainer.dataset.features
     embeddings = trainer.encode(features)
     assert embeddings.shape == (len(trainer.dataset), 16)
     norms = embeddings.norm(dim=-1)
     assert torch.allclose(norms, torch.ones_like(norms), atol=1e-5)
+
+    embeddings_with_adj = trainer.encode(features, adjacency=trainer.dataset.adjacency)
+    assert embeddings_with_adj.shape == (len(trainer.dataset), 16)
 
 
 def test_meta_jepa_trainer_learnable_temperature_clamps_and_trains():

@@ -31,6 +31,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=32, help="Mini-batch size")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
     parser.add_argument("--temperature", type=float, default=0.1, help="Contrastive temperature")
+    parser.add_argument("--hidden-dim", type=int, default=128, help="Hidden dimension for graph encoder")
+    parser.add_argument("--embedding-dim", type=int, default=64, help="Output embedding dimension")
+    parser.add_argument("--dropout", type=float, default=0.1, help="Dropout for encoder blocks")
+    parser.add_argument("--attn-heads", type=int, default=4, help="Number of attention heads")
+    parser.add_argument("--attn-layers", type=int, default=2, help="Number of attention layers")
     parser.add_argument(
         "--temperature-init",
         type=float,
@@ -66,6 +71,13 @@ def main() -> None:
     trainer = MetaJEPATrainer.from_tasks(
         tasks,
         min_family_size=args.min_family_size,
+        model_kwargs={
+            "hidden_dim": args.hidden_dim,
+            "embedding_dim": args.embedding_dim,
+            "dropout": args.dropout,
+            "attn_heads": args.attn_heads,
+            "attn_layers": args.attn_layers,
+        },
     )
     config = TrainingConfig(
         lr=args.lr,

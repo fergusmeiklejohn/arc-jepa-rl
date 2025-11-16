@@ -60,17 +60,26 @@ class MetaJEPATrainer:
         hidden_dim: int = 128,
         embedding_dim: int = 64,
         dropout: float = 0.1,
+        attn_heads: int = 4,
+        attn_layers: int = 2,
     ) -> None:
         _ensure_torch()
         self.dataset = dataset
         self.vocabulary = vocabulary
 
         feature_dim = dataset.features.shape[1]
+        vocab_size = len(vocabulary)
+        stats_dim = feature_dim - vocab_size
+        if stats_dim <= 0:
+            raise ValueError("dataset features must include primitive stats")
         self.model = MetaJEPAModel(
-            feature_dim,
+            vocab_size,
+            stats_dim,
             hidden_dim=hidden_dim,
             embedding_dim=embedding_dim,
             dropout=dropout,
+            num_heads=attn_heads,
+            num_layers=attn_layers,
         )
 
     @classmethod
@@ -133,11 +142,12 @@ class MetaJEPATrainer:
         for _ in range(config.epochs):
             epoch_loss = 0.0
             batches = 0
-            for features, labels in loader:
+            for features, labels, adjacency in loader:
                 features = features.to(device)
                 labels = labels.to(device)
+                adjacency = adjacency.to(device)
                 optimizer.zero_grad()
-                embeddings = model(features)
+                embeddings = model(features, adjacency=adjacency)
                 temperature = current_temperature()
                 loss = contrastive_loss(embeddings, labels, temperature=temperature)
                 if loss.requires_grad:
@@ -155,9 +165,16 @@ class MetaJEPATrainer:
             temperature=final_temperature,
         )
 
-    def encode(self, features: "torch.Tensor", *, device: str | None = None) -> "torch.Tensor":
+    def encode(
+        self,
+        features: "torch.Tensor",
+        *,
+        adjacency: "torch.Tensor" | None = None,
+        device: str | None = None,
+    ) -> "torch.Tensor":
         _ensure_torch()
         self.model.eval()
         tensor = features.to(device or "cpu")
+        adj = adjacency.to(device or "cpu") if adjacency is not None else None
         with torch.no_grad():
-            return self.model(tensor)
+            return self.model(tensor, adjacency=adj)

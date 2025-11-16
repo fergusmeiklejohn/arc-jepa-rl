@@ -30,6 +30,7 @@ class RuleFamilyExample:
     """Aggregated information for a single rule family."""
 
     family_id: str
+    signature: Tuple[str, ...]
     primitive_counts: Mapping[str, int]
     mean_program_length: float
     mean_changed_cells: float
@@ -83,6 +84,7 @@ def build_rule_family_examples(
         examples.append(
             RuleFamilyExample(
                 family_id=family_id,
+                signature=signature,
                 primitive_counts=dict(primitive_counts),
                 mean_program_length=total_length / family_size,
                 mean_changed_cells=total_changed / family_size if family_size else 0.0,
@@ -121,6 +123,9 @@ class PrimitiveVocabulary:
     def index(self, name: str) -> int:
         return self._index[name]
 
+    def __contains__(self, name: str) -> bool:  # pragma: no cover - trivial wrapper
+        return name in self._index
+
     def encode(self, counts: Mapping[str, int]) -> "torch.Tensor":
         _ensure_torch()
         vector = torch.zeros(len(self._items), dtype=torch.float32)
@@ -151,6 +156,7 @@ class RuleFamilyDataset(Dataset):  # type: ignore[misc]
         self.family_to_index = {example.family_id: idx for idx, example in enumerate(self.examples)}
         self.features = torch.stack([self._encode_example(example) for example in self.examples], dim=0)
         self.labels = torch.arange(len(self.examples), dtype=torch.long)
+        self.adjacency = torch.stack([self._encode_adjacency(example) for example in self.examples], dim=0)
 
     def _encode_example(self, example: RuleFamilyExample) -> "torch.Tensor":
         primitive_vec = self.vocabulary.encode(example.primitive_counts)
@@ -164,8 +170,39 @@ class RuleFamilyDataset(Dataset):  # type: ignore[misc]
     def __len__(self) -> int:
         return len(self.examples)
 
+    def _encode_adjacency(self, example: RuleFamilyExample) -> "torch.Tensor":
+        size = len(self.vocabulary)
+        adjacency = torch.zeros((size, size), dtype=torch.float32)
+        signature = example.signature
+        if not signature:
+            return adjacency
+
+        def _index(name: str) -> int | None:
+            try:
+                return self.vocabulary.index(name)
+            except KeyError:
+                return None
+
+        for primitive in signature:
+            idx = _index(primitive)
+            if idx is not None:
+                adjacency[idx, idx] = 1.0
+
+        for src, dst in zip(signature, signature[1:]):
+            src_idx = _index(src)
+            dst_idx = _index(dst)
+            if src_idx is None or dst_idx is None:
+                continue
+            adjacency[src_idx, dst_idx] += 1.0
+            adjacency[dst_idx, src_idx] += 1.0
+
+        total = adjacency.sum()
+        if total > 0:
+            adjacency = adjacency / total
+        return adjacency
+
     def __getitem__(self, idx: int):
-        return self.features[idx], self.labels[idx]
+        return self.features[idx], self.labels[idx], self.adjacency[idx]
 
 
 def build_rule_family_dataset(

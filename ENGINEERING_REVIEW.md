@@ -95,9 +95,9 @@ def discover_option_sequences(episodes, min_support=2, ...):
 - ✅ Meta-prior integration into DSL search (`training/meta_jepa/prior.py:114`)
 - ✅ CLI support (`scripts/train_meta_jepa.py`)
 - ✅ Learnable or fixed temperature with clamped parameterization (`training/meta_jepa/trainer.py:90`)
+- ✅ Graph/attention encoder over rule structures (`training/meta_jepa/model.py:20`)
 
 **Gaps:**
-- ❌ **Shallow neural architecture** — Simple 2-layer MLP (`model.py:41-47`); no graph structure, no attention
 - ❌ **No hierarchical clustering** — Family grouping is exact-match only (`data.py:24-25`)
 - ❌ **No relational prediction** — Only classification; blueprint describes "predicting transformations-of-transformations"
 
