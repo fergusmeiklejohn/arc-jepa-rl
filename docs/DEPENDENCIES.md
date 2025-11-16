@@ -30,6 +30,7 @@ uv pip install --python .venv/bin/python -r requirements-rl.txt
 | ----------------- | ------------------------------------------------- | ---------------------- |
 | `torch>=2.1`      | JEPA encoder, projection heads, RL models         | `requirements.txt`     |
 | `numpy>=1.24`     | Grid utilities, numerical helpers                 | `requirements.txt`     |
+| `psutil>=5.9`     | Lightweight system metrics for throughput tools   | `requirements.txt`     |
 | `pyyaml>=6.0`     | Config parsing for scripts and generators         | `requirements.txt`     |
 | `gymnasium>=0.29` | RLlib/Gym env wrappers for latent option env      | `requirements.txt`     |
 | `pytest>=8.0`     | Test suite                                       | `requirements-dev.txt` |

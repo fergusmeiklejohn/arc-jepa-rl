@@ -675,10 +675,18 @@ class ManifestTokenizedPairDataset(Dataset):
         adjacency = torch.stack([entry[2] for entry in tokenized], dim=0)
         return features, masks, adjacency
 
-def build_dummy_dataset(num_batches: int = 4, context_length: int = 3) -> InMemoryGridPairDataset:
+def build_dummy_dataset(
+    num_batches: int = 4,
+    context_length: int = 3,
+    batch_size: int = 2,
+) -> InMemoryGridPairDataset:
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
     grid = Grid([[0, 1], [0, 1]])
     context_sequence = tuple(grid for _ in range(context_length))
-    pairs = [([context_sequence, context_sequence], [grid, grid]) for _ in range(num_batches)]
+    context_batch = [tuple(context_sequence) for _ in range(batch_size)]
+    target_batch = [grid for _ in range(batch_size)]
+    pairs = [(context_batch, target_batch) for _ in range(num_batches)]
     return InMemoryGridPairDataset(pairs)
 
 

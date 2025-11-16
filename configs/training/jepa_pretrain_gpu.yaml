@@ -38,11 +38,14 @@ optimizer:
 
 training:
   batch_size: 1024
+  num_workers: 8
+  grad_accum_steps: 2
   epochs: 30
   checkpoint_dir: artifacts/jepa/pretrain_gpu
   device: cuda
   drop_last: true
   amp: true
+  pin_memory: true
 
 augmentations:
   mask_ratio: 0.15
