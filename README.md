@@ -146,6 +146,23 @@ pre_tokenized:
 `TokenizedPairDataset` when `pre_tokenized.path` is set; otherwise it falls back
 to manifest-time tokenization.
 
+Need to sanity-check tokenizer throughput? Run the micro-benchmark:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/benchmark_tokenizer.py --samples 512 --height 24 --width 24 --respect-colors --connectivity 8
+```
+
+The script times both the legacy path and the vectorized implementation and
+validates numerical parity. For heavy ARC grids (120x120, 1024 object slots, 512
+color features) the command below reports ~3.1× speedup on a CPU-only run:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/benchmark_tokenizer.py \
+  --samples 16 --height 120 --width 120 \
+  --respect-colors --connectivity 8 \
+  --max-objects 1024 --max-color-features 512
+```
+
 ### JEPA pretraining
 
 Run full JEPA training against any manifest:
@@ -197,6 +214,9 @@ The sample config wires RLlib into `ArcLatentOptionEnv`, loads JEPA encoder sett
 - Install optional extras as needed:
   - `requirements-dev.txt` for test tooling (`pytest`).
   - `requirements-rl.txt` for RLlib-based PPO/A2C training.
+- `scipy>=1.11` is included in `requirements.txt` to power the vectorized object
+  tokenization path; when it's missing the code falls back to the legacy Python
+  implementation.
 - See `docs/DEPENDENCIES.md` for the full process, package descriptions, and contribution guidelines.
 
 ## Decision Records
