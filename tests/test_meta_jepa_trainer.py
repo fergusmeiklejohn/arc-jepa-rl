@@ -38,9 +38,27 @@ def test_meta_jepa_trainer_fit_and_encode():
 
     assert len(result.history) == 2
     assert all(loss >= 0 for loss in result.history)
+    assert pytest.approx(result.temperature, rel=1e-5) == 0.5
 
     features = trainer.dataset.features
     embeddings = trainer.encode(features)
     assert embeddings.shape == (len(trainer.dataset), 16)
     norms = embeddings.norm(dim=-1)
     assert torch.allclose(norms, torch.ones_like(norms), atol=1e-5)
+
+
+def test_meta_jepa_trainer_learnable_temperature_clamps_and_trains():
+    trainer = MetaJEPATrainer.from_tasks(build_tasks(), min_family_size=2, model_kwargs={"embedding_dim": 16})
+
+    config = TrainingConfig(
+        epochs=2,
+        batch_size=2,
+        lr=1e-3,
+        learnable_temperature=True,
+        temperature_init=0.2,
+        temperature_bounds=(0.1, 0.3),
+    )
+    result = trainer.fit(config)
+
+    assert len(result.history) == 2
+    assert config.temperature_bounds[0] <= result.temperature <= config.temperature_bounds[1]

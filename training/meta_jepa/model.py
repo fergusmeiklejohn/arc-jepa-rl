@@ -61,7 +61,7 @@ def contrastive_loss(
     embeddings: "torch.Tensor",
     labels: "torch.Tensor",
     *,
-    temperature: float = 0.1,
+    temperature: float | "torch.Tensor" = 0.1,
 ) -> "torch.Tensor":
     """Compute an InfoNCE-style contrastive loss over rule families."""
 
@@ -71,10 +71,17 @@ def contrastive_loss(
         raise ValueError("embeddings must be 2D (batch, dim)")
     if labels.ndim != 1 or labels.shape[0] != embeddings.shape[0]:
         raise ValueError("labels must be 1D and align with embeddings")
-    if temperature <= 0:
+    if isinstance(temperature, torch.Tensor):
+        temp_tensor = temperature.to(device=embeddings.device, dtype=embeddings.dtype)
+    else:
+        temp_tensor = torch.tensor(float(temperature), dtype=embeddings.dtype, device=embeddings.device)
+
+    if temp_tensor.numel() != 1:
+        raise ValueError("temperature must be a scalar")
+    if torch.any(temp_tensor <= 0):
         raise ValueError("temperature must be positive")
 
-    sim_matrix = torch.matmul(embeddings, embeddings.T) / temperature
+    sim_matrix = torch.matmul(embeddings, embeddings.T) / temp_tensor
     logits_mask = torch.ones_like(sim_matrix, dtype=torch.bool)
     logits_mask.fill_diagonal_(False)
 

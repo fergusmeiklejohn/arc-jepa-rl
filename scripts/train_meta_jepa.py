@@ -31,6 +31,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=32, help="Mini-batch size")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
     parser.add_argument("--temperature", type=float, default=0.1, help="Contrastive temperature")
+    parser.add_argument(
+        "--temperature-init",
+        type=float,
+        default=0.1,
+        help="Initial temperature when --learnable-temperature is enabled",
+    )
+    parser.add_argument(
+        "--temperature-bounds",
+        type=float,
+        nargs=2,
+        metavar=("MIN", "MAX"),
+        default=(0.03, 0.3),
+        help="Clamping range for learnable temperature",
+    )
+    parser.add_argument(
+        "--learnable-temperature",
+        action="store_true",
+        help="Enable learnable temperature instead of fixed value",
+    )
     parser.add_argument("--device", type=str, default="cpu", help="Torch device (default: cpu)")
     parser.add_argument("--min-family-size", type=int, default=2, help="Minimum examples per rule family")
     parser.add_argument("--output", type=Path, default=None, help="Optional path to write trained weights (.pt)")
@@ -53,6 +72,9 @@ def main() -> None:
         batch_size=args.batch_size,
         epochs=args.epochs,
         temperature=args.temperature,
+        temperature_init=args.temperature_init,
+        temperature_bounds=tuple(args.temperature_bounds),
+        learnable_temperature=args.learnable_temperature,
         device=args.device,
     )
     result = trainer.fit(config)
@@ -60,6 +82,7 @@ def main() -> None:
     print("Finished training Meta-JEPA")
     for epoch, loss in enumerate(result.history, start=1):
         print(f"Epoch {epoch}: loss={loss:.4f}")
+    print(f"Final temperature: {result.temperature:.4f}")
 
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

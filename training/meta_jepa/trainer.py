@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, List, Mapping, Sequence
+from typing import Iterable, List, Mapping, Sequence, Tuple
 
 try:  # pragma: no cover - torch optional
     import torch
@@ -34,6 +34,9 @@ class TrainingConfig:
     batch_size: int = 16
     epochs: int = 5
     temperature: float = 0.1
+    temperature_init: float = 0.1
+    temperature_bounds: Tuple[float, float] = (0.03, 0.3)
+    learnable_temperature: bool = False
     weight_decay: float = 0.0
     device: str = "cpu"
 
@@ -43,6 +46,7 @@ class TrainingResult:
     history: List[float]
     vocabulary: PrimitiveVocabulary
     dataset: RuleFamilyDataset
+    temperature: float
 
 
 class MetaJEPATrainer:
@@ -85,8 +89,29 @@ class MetaJEPATrainer:
         _ensure_torch()
         device = torch.device(config.device)
         model = self.model.to(device)
+
+        min_temp, max_temp = config.temperature_bounds
+        if min_temp <= 0 or max_temp <= 0:
+            raise ValueError("temperature_bounds must be positive")
+        if min_temp >= max_temp:
+            raise ValueError("temperature_bounds must be an increasing pair")
+
+        base_temperature = config.temperature_init if config.learnable_temperature else config.temperature
+        if base_temperature <= 0:
+            raise ValueError("temperature must be positive")
+
+        temperature_value = torch.tensor(base_temperature, dtype=torch.float32, device=device)
+        if config.learnable_temperature:
+            log_temperature = torch.nn.Parameter(torch.log(temperature_value))
+        else:
+            log_temperature = torch.log(temperature_value).detach()
+
+        params = list(model.parameters())
+        if config.learnable_temperature:
+            params.append(log_temperature)
+
         optimizer = torch.optim.AdamW(
-            model.parameters(),
+            params,
             lr=config.lr,
             weight_decay=config.weight_decay,
         )
@@ -96,6 +121,12 @@ class MetaJEPATrainer:
             batch_size=min(config.batch_size, len(self.dataset)),
             shuffle=True,
         )
+
+        def current_temperature() -> "torch.Tensor":
+            temperature = torch.exp(log_temperature)
+            if config.learnable_temperature:
+                temperature = torch.clamp(temperature, min=min_temp, max=max_temp)
+            return temperature
 
         history: List[float] = []
         model.train()
@@ -107,7 +138,8 @@ class MetaJEPATrainer:
                 labels = labels.to(device)
                 optimizer.zero_grad()
                 embeddings = model(features)
-                loss = contrastive_loss(embeddings, labels, temperature=config.temperature)
+                temperature = current_temperature()
+                loss = contrastive_loss(embeddings, labels, temperature=temperature)
                 if loss.requires_grad:
                     loss.backward()
                     optimizer.step()
@@ -115,7 +147,13 @@ class MetaJEPATrainer:
                     batches += 1
             history.append(epoch_loss / max(1, batches))
 
-        return TrainingResult(history=history, vocabulary=self.vocabulary, dataset=self.dataset)
+        final_temperature = float(current_temperature().detach().cpu().item())
+        return TrainingResult(
+            history=history,
+            vocabulary=self.vocabulary,
+            dataset=self.dataset,
+            temperature=final_temperature,
+        )
 
     def encode(self, features: "torch.Tensor", *, device: str | None = None) -> "torch.Tensor":
         _ensure_torch()
