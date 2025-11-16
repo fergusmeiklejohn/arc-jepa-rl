@@ -1,5 +1,5 @@
 from arcgen import Grid, ProgramStep, SyntheticTask
-from training.eval import EvaluationSuite, EvaluationVariant
+from training.eval import ArcExample, ArcTask, EvaluationSuite, EvaluationVariant
 
 
 def make_task(task_id: str, primitive: str):
@@ -40,3 +40,35 @@ def test_evaluation_suite_runs_variants():
     assert full.successes >= filtered.successes
     assert filtered.total_tasks == len(tasks)
     assert all(detail.programs_tested >= 0 for detail in full.details)
+
+
+def test_evaluation_suite_handles_arc_dev_tasks():
+    train_examples = (
+        ArcExample(Grid([[0]]), Grid([[0]])),
+        ArcExample(Grid([[0, 1], [1, 0]]), Grid([[0, 1], [1, 0]])),
+    )
+    test_examples = (ArcExample(Grid([[2, 2]]), Grid([[2, 2]])),)
+    task = ArcTask(task_id="dev_task", train_examples=train_examples, test_examples=test_examples)
+
+    suite = EvaluationSuite([task])
+    variant = EvaluationVariant(name="arc_dev", description="dev harness", max_nodes=2)
+    result = suite.run([variant])[0]
+
+    assert result.successes == 1
+    assert result.details[0].success
+
+
+def test_evaluation_suite_marks_failed_test_predictions():
+    train_examples = (
+        ArcExample(Grid([[0]]), Grid([[0]])),
+        ArcExample(Grid([[0, 1]]), Grid([[0, 1]])),
+    )
+    failing_test = (ArcExample(Grid([[3]]), Grid([[1]])),)
+    task = ArcTask(task_id="dev_task_bad", train_examples=train_examples, test_examples=failing_test)
+
+    suite = EvaluationSuite([task])
+    variant = EvaluationVariant(name="arc_dev", description="dev harness", max_nodes=2)
+    result = suite.run([variant])[0]
+
+    assert result.successes == 0
+    assert not result.details[0].success

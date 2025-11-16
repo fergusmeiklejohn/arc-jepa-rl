@@ -12,12 +12,28 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from training.eval import EvaluationSuite, EvaluationVariant, load_synthetic_tasks_jsonl
+from training.eval import (
+    EvaluationSuite,
+    EvaluationVariant,
+    load_arc_dev_tasks,
+    load_synthetic_tasks_jsonl,
+)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run ARC evaluation and ablations")
-    parser.add_argument("--tasks", type=Path, required=True, help="Path to JSONL file of evaluation tasks")
+    parser.add_argument(
+        "--tasks",
+        type=Path,
+        default=None,
+        help="Path to synthetic JSONL manifest (use --arc-dev-root for ARC dev)",
+    )
+    parser.add_argument(
+        "--arc-dev-root",
+        type=Path,
+        default=None,
+        help="Path to ARC dev (training) directory or JSON file",
+    )
     parser.add_argument(
         "--output",
         type=Path,
@@ -36,7 +52,10 @@ def parse_args() -> argparse.Namespace:
         default=3,
         help="Maximum program size for the default DSL-only ablation",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if bool(args.tasks) == bool(args.arc_dev_root):
+        parser.error("Specify exactly one of --tasks or --arc-dev-root")
+    return args
 
 
 def build_default_variants(top_k: int, max_nodes: int) -> List[EvaluationVariant]:
@@ -57,7 +76,10 @@ def build_default_variants(top_k: int, max_nodes: int) -> List[EvaluationVariant
 
 def main() -> None:
     args = parse_args()
-    tasks = load_synthetic_tasks_jsonl(args.tasks)
+    if args.arc_dev_root:
+        tasks = load_arc_dev_tasks(args.arc_dev_root)
+    else:
+        tasks = load_synthetic_tasks_jsonl(args.tasks)
     if not tasks:
         raise RuntimeError("No evaluation tasks provided")
 

@@ -6,13 +6,15 @@ from .suite import (
     TaskEvaluation,
     VariantMetrics,
 )
-from .utils import load_synthetic_tasks_jsonl
+from .utils import ArcExample, ArcTask, load_arc_dev_tasks, load_synthetic_tasks_jsonl
 
 __all__ = [
     "EvaluationSuite",
     "EvaluationVariant",
     "VariantMetrics",
     "TaskEvaluation",
+    "ArcExample",
+    "ArcTask",
     "load_synthetic_tasks_jsonl",
+    "load_arc_dev_tasks",
 ]
-

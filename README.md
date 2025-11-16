@@ -64,6 +64,18 @@ Evaluate a manifest to sanity-check solve rates and program counts:
 PYTHONPATH=. .venv/bin/python scripts/evaluate_arc.py --tasks data/pilot_curriculum/manifest.jsonl --output artifacts/eval/pilot_curriculum.json
 ```
 
+To benchmark against the official ARC dev (training) set, point the harness at the
+directory (or individual JSON file) that contains the canonical tasks:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/evaluate_arc.py \
+  --arc-dev-root /path/to/arc-dataset/training \
+  --output artifacts/eval/arc_dev.json
+```
+
+The loader validates each ARC file, uses all provided train pairs as few-shot
+examples, and checks predictions against any available test outputs.
+
 ### JEPA pretraining
 
 Run full JEPA training against any manifest:
