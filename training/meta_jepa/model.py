@@ -54,6 +54,7 @@ if torch is not None:  # pragma: no branch
             dropout: float = 0.1,
             num_layers: int = 2,
             num_heads: int = 4,
+            relational_decoder: bool = False,
         ) -> None:
             super().__init__()
             if vocabulary_size <= 0:
@@ -86,13 +87,21 @@ if torch is not None:  # pragma: no branch
             self.out_norm = nn.LayerNorm(hidden_dim)
             self.out_proj = nn.Linear(hidden_dim, embedding_dim)
             self.dropout = nn.Dropout(dropout)
+            self.relational_decoder = None
+            if relational_decoder:
+                self.relational_decoder = nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.GELU(),
+                    nn.Linear(hidden_dim, vocabulary_size * vocabulary_size),
+                )
 
         def forward(
             self,
             features: "torch.Tensor",
             *,
             adjacency: "torch.Tensor" | None = None,
-        ) -> "torch.Tensor":
+            return_relations: bool = False,
+        ) -> "tuple[torch.Tensor, torch.Tensor | None]":
             if features.ndim != 2:
                 raise ValueError("features must be 2D (batch, dim)")
             if features.shape[1] < self.vocab_size + self.stats_dim:
@@ -123,7 +132,14 @@ if torch is not None:  # pragma: no branch
 
             cls_repr = self.out_norm(x[:, 0])
             embedding = self.out_proj(cls_repr)
-            return F.normalize(embedding, dim=-1)
+            normalized = F.normalize(embedding, dim=-1)
+
+            relational_logits = None
+            if return_relations and self.relational_decoder is not None:
+                logits = self.relational_decoder(cls_repr)
+                relational_logits = logits.view(-1, self.vocab_size, self.vocab_size)
+
+            return normalized, relational_logits
 
         def _prepare_primitive_adjacency(
             self,

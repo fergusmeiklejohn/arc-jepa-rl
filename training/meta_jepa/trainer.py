@@ -8,9 +8,11 @@ from typing import Iterable, List, Mapping, Sequence, Tuple
 try:  # pragma: no cover - torch optional
     import torch
     from torch.utils.data import DataLoader
+    import torch.nn.functional as F
 except Exception:  # pragma: no cover
     torch = None  # type: ignore
     DataLoader = object  # type: ignore
+    F = None  # type: ignore
 
 from arcgen import SyntheticTask
 
@@ -37,6 +39,7 @@ class TrainingConfig:
     temperature_init: float = 0.1
     temperature_bounds: Tuple[float, float] = (0.03, 0.3)
     learnable_temperature: bool = False
+    relational_weight: float = 0.0
     weight_decay: float = 0.0
     device: str = "cpu"
 
@@ -62,6 +65,7 @@ class MetaJEPATrainer:
         dropout: float = 0.1,
         attn_heads: int = 4,
         attn_layers: int = 2,
+        relational_decoder: bool = False,
     ) -> None:
         _ensure_torch()
         self.dataset = dataset
@@ -80,6 +84,7 @@ class MetaJEPATrainer:
             dropout=dropout,
             num_heads=attn_heads,
             num_layers=attn_layers,
+            relational_decoder=relational_decoder,
         )
 
     @classmethod
@@ -139,6 +144,7 @@ class MetaJEPATrainer:
 
         history: List[float] = []
         model.train()
+        use_relational = bool(config.relational_weight > 0 and getattr(self.model, "relational_decoder", None))
         for _ in range(config.epochs):
             epoch_loss = 0.0
             batches = 0
@@ -147,9 +153,16 @@ class MetaJEPATrainer:
                 labels = labels.to(device)
                 adjacency = adjacency.to(device)
                 optimizer.zero_grad()
-                embeddings = model(features, adjacency=adjacency)
+                embeddings, relational_logits = model(
+                    features,
+                    adjacency=adjacency,
+                    return_relations=use_relational,
+                )
                 temperature = current_temperature()
                 loss = contrastive_loss(embeddings, labels, temperature=temperature)
+                if use_relational and relational_logits is not None:
+                    relational_loss = F.binary_cross_entropy_with_logits(relational_logits, adjacency)
+                    loss = loss + config.relational_weight * relational_loss
                 if loss.requires_grad:
                     loss.backward()
                     optimizer.step()
@@ -177,4 +190,5 @@ class MetaJEPATrainer:
         tensor = features.to(device or "cpu")
         adj = adjacency.to(device or "cpu") if adjacency is not None else None
         with torch.no_grad():
-            return self.model(tensor, adjacency=adj)
+            embeddings, _ = self.model(tensor, adjacency=adj)
+            return embeddings

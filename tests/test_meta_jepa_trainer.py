@@ -68,3 +68,27 @@ def test_meta_jepa_trainer_learnable_temperature_clamps_and_trains():
 
     assert len(result.history) == 2
     assert config.temperature_bounds[0] <= result.temperature <= config.temperature_bounds[1]
+
+
+def test_meta_jepa_trainer_relational_auxiliary_task():
+    trainer = MetaJEPATrainer.from_tasks(
+        build_tasks(),
+        min_family_size=1,
+        model_kwargs={"embedding_dim": 16, "relational_decoder": True},
+    )
+
+    config = TrainingConfig(
+        epochs=1,
+        batch_size=2,
+        lr=1e-3,
+        relational_weight=0.5,
+    )
+    trainer.fit(config)
+
+    assert trainer.model.relational_decoder is not None
+    features = trainer.dataset.features
+    adjacency = trainer.dataset.adjacency
+    with torch.no_grad():
+        _, logits = trainer.model(features, adjacency=adjacency, return_relations=True)
+    assert logits is not None
+    assert logits.shape == adjacency.shape

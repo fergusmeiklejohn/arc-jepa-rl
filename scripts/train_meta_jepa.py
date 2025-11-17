@@ -37,6 +37,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--attn-heads", type=int, default=4, help="Number of attention heads")
     parser.add_argument("--attn-layers", type=int, default=2, help="Number of attention layers")
     parser.add_argument(
+        "--enable-relational-task",
+        action="store_true",
+        help="Enable relational prediction auxiliary head",
+    )
+    parser.add_argument(
+        "--relational-weight",
+        type=float,
+        default=0.0,
+        help="Loss weight for the relational auxiliary task",
+    )
+    parser.add_argument(
         "--temperature-init",
         type=float,
         default=0.1,
@@ -77,6 +88,7 @@ def main() -> None:
             "dropout": args.dropout,
             "attn_heads": args.attn_heads,
             "attn_layers": args.attn_layers,
+            "relational_decoder": args.enable_relational_task or args.relational_weight > 0,
         },
     )
     config = TrainingConfig(
@@ -87,6 +99,7 @@ def main() -> None:
         temperature_init=args.temperature_init,
         temperature_bounds=tuple(args.temperature_bounds),
         learnable_temperature=args.learnable_temperature,
+        relational_weight=args.relational_weight,
         device=args.device,
     )
     result = trainer.fit(config)

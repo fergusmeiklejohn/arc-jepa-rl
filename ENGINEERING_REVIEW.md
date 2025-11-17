@@ -97,9 +97,9 @@ def discover_option_sequences(episodes, min_support=2, ...):
 - ✅ Learnable or fixed temperature with clamped parameterization (`training/meta_jepa/trainer.py:90`)
 - ✅ Graph/attention encoder over rule structures (`training/meta_jepa/model.py:20`)
 - ✅ Hierarchical clustering over rule embeddings w/ prior exposure (`training/meta_jepa/hierarchy.py`)
+- ✅ Relational prediction auxiliary task for rule compositions (`training/meta_jepa/trainer.py:80`)
 
 **Gaps:**
-- ❌ **No relational prediction** — Only classification; blueprint describes "predicting transformations-of-transformations"
 
 **Evidence of Quality:**
 ```python
