@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from typing import Iterable, Mapping, Tuple
+from typing import Dict, Iterable, Mapping, Sequence, Tuple
 
 try:  # pragma: no cover - optional dependency
     import torch
@@ -11,6 +11,7 @@ except Exception:  # pragma: no cover
     torch = None  # type: ignore
 
 from arcgen import Grid
+from training.meta_jepa.hierarchy import RuleFamilyHierarchy, build_rule_family_hierarchy
 from training.meta_jepa.trainer import MetaJEPATrainer
 from training.utils import count_changed_cells
 
@@ -18,6 +19,15 @@ if torch:
     Tensor = torch.Tensor
 else:  # pragma: no cover
     Tensor = object  # type: ignore[misc]
+
+
+def _default_cluster_levels(num_families: int) -> Tuple[int, ...]:
+    if num_families <= 1:
+        return (1,)
+    mid = max(1, num_families // 2)
+    coarse = max(1, num_families // 4)
+    levels = sorted({num_families, mid, coarse, 1}, reverse=True)
+    return tuple(levels)
 
 
 class MetaJEPAPrior:
@@ -28,6 +38,7 @@ class MetaJEPAPrior:
         trainer: MetaJEPATrainer,
         *,
         device: str | torch.device = "cpu",
+        cluster_levels: Sequence[int] | None = None,
     ) -> None:
         if torch is None:  # pragma: no cover - defensive
             raise RuntimeError("PyTorch is required for Meta-JEPA priors")
@@ -46,6 +57,13 @@ class MetaJEPAPrior:
         )
         self._reference_embeddings = self._reference_embeddings.to(self.device)
         self._examples = trainer.dataset.examples
+        family_ids = [example.family_id for example in self._examples]
+        levels = tuple(cluster_levels) if cluster_levels else _default_cluster_levels(len(family_ids))
+        self.hierarchy = build_rule_family_hierarchy(family_ids, self._reference_embeddings, levels=levels)
+        self._cluster_centroids: Dict[int, torch.Tensor] = {
+            level: data.centroids.to(self.device)
+            for level, data in self.hierarchy.levels.items()
+        }
 
     def score_program(
         self,
@@ -58,29 +76,66 @@ class MetaJEPAPrior:
         if torch is None:  # pragma: no cover - defensive
             return 0.0
 
-        counts = self._primitive_counts(program)
-        if not counts:
+        embedding = self._program_embedding(program, context, candidate)
+        if embedding is None:
             return 0.0
-
-        changed = count_changed_cells(context, candidate)
-        features, adjacency = self._encode_features(
-            counts,
-            changed_cells=float(changed),
-            program_length=float(len(program)),
-            program=program,
-        )
-        adjacency_tensor = adjacency.unsqueeze(0) if adjacency is not None else None
-        embedding = self.trainer.encode(
-            features.unsqueeze(0),
-            adjacency=adjacency_tensor,
-            device=str(self.device),
-        ).squeeze(0)
-        embedding = embedding.to(self.device)
 
         similarities = torch.matmul(self._reference_embeddings, embedding)
         if similarities.numel() == 0:
             return 0.0
         return float(similarities.max().item())
+
+    def score_program_levels(
+        self,
+        program,
+        context: Grid,
+        candidate: Grid,
+        *,
+        levels: Sequence[int] | None = None,
+    ) -> Mapping[int, float]:
+        """Return similarity scores against requested hierarchy levels."""
+
+        embedding = self._program_embedding(program, context, candidate)
+        if embedding is None:
+            return {}
+
+        requested = (
+            tuple(levels)
+            if levels is not None
+            else self.hierarchy.available_levels()
+        )
+        scores: Dict[int, float] = {}
+        for level in requested:
+            centroids = self._cluster_centroids.get(level)
+            if centroids is None or centroids.numel() == 0:
+                continue
+            sims = torch.matmul(centroids, embedding)
+            if sims.numel() == 0:
+                continue
+            scores[level] = float(sims.max().item())
+        return scores
+
+    def predict_cluster(
+        self,
+        program,
+        context: Grid,
+        candidate: Grid,
+        *,
+        level: int,
+    ) -> int | None:
+        """Return the most similar cluster id for a program at a hierarchy level."""
+
+        embedding = self._program_embedding(program, context, candidate)
+        if embedding is None:
+            return None
+
+        centroids = self._cluster_centroids.get(level)
+        if centroids is None or centroids.numel() == 0:
+            return None
+        sims = torch.matmul(centroids, embedding)
+        if sims.numel() == 0:
+            return None
+        return int(torch.argmax(sims).item())
 
     def weighted_score(
         self,
@@ -107,6 +162,26 @@ class MetaJEPAPrior:
         )
         counter = Counter(primitives)
         return {name: count for name, count in counter.items() if count > 0}
+
+    def _program_embedding(self, program, context: Grid, candidate: Grid) -> torch.Tensor | None:
+        counts = self._primitive_counts(program)
+        if not counts:
+            return None
+
+        changed = count_changed_cells(context, candidate)
+        features, adjacency = self._encode_features(
+            counts,
+            changed_cells=float(changed),
+            program_length=float(len(program)),
+            program=program,
+        )
+        adjacency_tensor = adjacency.unsqueeze(0) if adjacency is not None else None
+        embedding = self.trainer.encode(
+            features.unsqueeze(0),
+            adjacency=adjacency_tensor,
+            device=str(self.device),
+        ).squeeze(0)
+        return embedding.to(self.device)
 
     def _encode_features(
         self,
