@@ -17,6 +17,8 @@ def make_metrics(name: str) -> list[VariantMetrics]:
         success_rate=1.0,
         avg_programs_tested=1.0,
         details=(),
+        novel_discoveries=0,
+        novelty_candidates=0,
     )
     return [metrics]
 
@@ -33,6 +35,7 @@ def test_build_summary_without_surprise_section():
     assert summary["task_count"] == 5
     assert summary["task_source"].endswith("arc_dev")
     assert summary["results"][0]["variant"] == "base"
+    assert summary["results"][0]["novelty_rate"] is None
     assert "surprise_results" not in summary
 
 
@@ -56,6 +59,7 @@ def test_build_summary_with_surprise_results():
     assert surprise_entry["task_count"] == 2
     assert surprise_entry["results"][0]["variant"] == "surprise"
     assert surprise_entry["task_source"].endswith("ood_surprise_tasks.jsonl")
+    assert surprise_entry["results"][0]["novel_rule_discoveries"] == 0
 
 
 def test_surprise_manifest_loads():

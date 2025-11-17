@@ -165,6 +165,14 @@ The model learns to reason in **rule space** — forming clusters of related tra
 - Program search depth / enumerated candidates
 - Novel rule discovery rate (emergent skills)
 
+Novel rule discovery rate is now computed directly inside the evaluation suite: for
+any task with a rule trace, we compare the synthesized DSL program signature
+against the trace signature. When the solver matches the examples with a program
+that uses a different ordered primitive signature, it counts as one novel rule
+discovery. The JSON summary emitted by `scripts/evaluate_arc.py` exposes both the
+raw counts (`novel_rule_discoveries` and `novelty_candidates`) and a
+`novelty_rate` ratio so we can quantify emergent programs per evaluation run.
+
 ---
 
 ## 7. Data Generation Strategy

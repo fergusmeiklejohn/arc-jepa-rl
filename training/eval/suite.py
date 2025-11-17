@@ -32,6 +32,9 @@ class TaskEvaluation:
     task_id: str
     success: bool
     programs_tested: int
+    novel_rule: bool | None = None
+    solver_signature: Tuple[str, ...] | None = None
+    reference_signature: Tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -44,6 +47,14 @@ class VariantMetrics:
     success_rate: float
     avg_programs_tested: float
     details: Sequence[TaskEvaluation]
+    novel_discoveries: int
+    novelty_candidates: int
+
+    @property
+    def novelty_rate(self) -> float | None:
+        if self.novelty_candidates == 0:
+            return None
+        return self.novel_discoveries / self.novelty_candidates
 
     def to_dict(self) -> dict:
         return {
@@ -53,11 +64,21 @@ class VariantMetrics:
             "successes": self.successes,
             "success_rate": self.success_rate,
             "avg_programs_tested": self.avg_programs_tested,
+            "novel_rule_discoveries": self.novel_discoveries,
+            "novelty_candidates": self.novelty_candidates,
+            "novelty_rate": self.novelty_rate,
             "details": [
                 {
                     "task_id": detail.task_id,
                     "success": detail.success,
                     "programs_tested": detail.programs_tested,
+                    "novel_rule": detail.novel_rule,
+                    "solver_signature": list(detail.solver_signature)
+                    if detail.solver_signature is not None
+                    else None,
+                    "reference_signature": list(detail.reference_signature)
+                    if detail.reference_signature is not None
+                    else None,
                 }
                 for detail in self.details
             ],
@@ -93,6 +114,8 @@ class EvaluationSuite:
         details: List[TaskEvaluation] = []
         successes = 0
         total_programs = 0
+        novel_discoveries = 0
+        novelty_candidates = 0
 
         for task in self.tasks:
             examples = self._training_examples(task)
@@ -107,11 +130,24 @@ class EvaluationSuite:
                 successes += 1
             programs_tested = result.evaluated
             total_programs += programs_tested
+
+            solver_signature = self._program_signature(result.program)
+            reference_signature = self._reference_signature(task)
+            novel_rule: bool | None = None
+            if success and solver_signature is not None and reference_signature is not None:
+                novel_rule = solver_signature != reference_signature
+                novelty_candidates += 1
+                if novel_rule:
+                    novel_discoveries += 1
+
             details.append(
                 TaskEvaluation(
                     task_id=task.task_id,
                     success=success,
                     programs_tested=programs_tested,
+                    novel_rule=novel_rule,
+                    solver_signature=solver_signature,
+                    reference_signature=reference_signature,
                 )
             )
 
@@ -126,6 +162,8 @@ class EvaluationSuite:
             success_rate=success_rate,
             avg_programs_tested=avg_programs,
             details=tuple(details),
+            novel_discoveries=novel_discoveries,
+            novelty_candidates=novelty_candidates,
         )
 
     def _build_registry(self, variant: EvaluationVariant) -> PrimitiveRegistry:
@@ -210,3 +248,30 @@ class EvaluationSuite:
             if expected is not None and prediction.cells != expected.cells:
                 return False
         return True
+
+    @staticmethod
+    def _program_signature(program: Program | None) -> Tuple[str, ...] | None:
+        if program is None:
+            return None
+        names: List[str] = []
+        for expr in program.traverse():
+            primitive = expr.primitive
+            if primitive is None:
+                continue
+            names.append(primitive.name)
+        return tuple(names)
+
+    @staticmethod
+    def _reference_signature(task: object) -> Tuple[str, ...] | None:
+        trace = getattr(task, "rule_trace", None)
+        if not trace:
+            return None
+        names: List[str] = []
+        for step in trace:
+            primitive = getattr(step, "primitive", None)
+            if not primitive:
+                continue
+            names.append(str(primitive))
+        if not names:
+            return None
+        return tuple(names)

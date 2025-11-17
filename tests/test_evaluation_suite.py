@@ -40,6 +40,7 @@ def test_evaluation_suite_runs_variants():
     assert full.successes >= filtered.successes
     assert filtered.total_tasks == len(tasks)
     assert all(detail.programs_tested >= 0 for detail in full.details)
+    assert full.details[0].reference_signature == ("mirror_y",)
 
 
 def test_evaluation_suite_handles_arc_dev_tasks():
@@ -56,6 +57,7 @@ def test_evaluation_suite_handles_arc_dev_tasks():
 
     assert result.successes == 1
     assert result.details[0].success
+    assert result.details[0].novel_rule is None
 
 
 def test_evaluation_suite_marks_failed_test_predictions():
