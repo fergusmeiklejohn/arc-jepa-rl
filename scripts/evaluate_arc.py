@@ -15,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from training.eval import (
     EvaluationSuite,
     EvaluationVariant,
+    build_summary,
     load_arc_dev_tasks,
     load_synthetic_tasks_jsonl,
 )
@@ -39,6 +40,12 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Optional path to write JSON summary",
+    )
+    parser.add_argument(
+        "--surprise-tasks",
+        type=Path,
+        default=None,
+        help="Optional JSONL manifest for human-crafted surprise tasks",
     )
     parser.add_argument(
         "--top-k",
@@ -78,8 +85,12 @@ def main() -> None:
     args = parse_args()
     if args.arc_dev_root:
         tasks = load_arc_dev_tasks(args.arc_dev_root)
+        dataset = "arc_dev"
+        task_source: Path | None = args.arc_dev_root
     else:
         tasks = load_synthetic_tasks_jsonl(args.tasks)
+        dataset = "synthetic_jsonl"
+        task_source = args.tasks
     if not tasks:
         raise RuntimeError("No evaluation tasks provided")
 
@@ -87,7 +98,26 @@ def main() -> None:
     variants = build_default_variants(args.top_k, args.max_nodes)
     results = suite.run(variants)
 
-    summary = {"results": [metrics.to_dict() for metrics in results]}
+    surprise_summary = None
+    if args.surprise_tasks:
+        surprise_tasks = load_synthetic_tasks_jsonl(args.surprise_tasks)
+        if not surprise_tasks:
+            raise RuntimeError("No surprise tasks provided")
+        surprise_metrics = EvaluationSuite(surprise_tasks).run(variants)
+        surprise_summary = {
+            "label": "surprise_tasks",
+            "task_count": len(surprise_tasks),
+            "metrics": surprise_metrics,
+            "source": args.surprise_tasks,
+        }
+
+    summary = build_summary(
+        dataset,
+        metrics=results,
+        task_count=len(tasks),
+        task_source=task_source,
+        surprise=surprise_summary,
+    )
 
     print(json.dumps(summary, indent=2))
     if args.output:
