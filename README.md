@@ -198,6 +198,41 @@ training:
 
 `train_jepa.py` logs `val/loss` to TensorBoard when enabled, includes validation curves in `metrics.json`, and stops once the patience budget is exhausted. Early stopping requires a validation split.
 
+### JEPA loss ↔ solver success correlation
+
+Use `scripts/validate_jepa_correlation.py` to quantify how predictive the JEPA validation
+loss is for downstream solving success. The script:
+
+1. Loads each checkpoint and evaluates the InfoNCE loss on a validation manifest.
+2. Builds a latent-distance-guided solver that ranks DSL programs by how closely
+   their JEPA embeddings match the target embeddings.
+3. Runs the solver on either a synthetic JSONL manifest (`--tasks`) or the ARC
+   dev set (`--arc-dev-root`).
+4. Logs per-checkpoint metrics plus the Pearson correlation between loss and solve rate.
+
+Example (tiny smoke test):
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/validate_jepa_correlation.py \
+  --jepa-config configs/training/jepa_tiny.yaml \
+  --checkpoints artifacts/jepa/tiny_run/checkpoint_epoch_0001.pt \
+                artifacts/jepa/tiny_run/checkpoint_epoch_0002.pt \
+                artifacts/jepa/tiny_run/checkpoint_epoch_0003.pt \
+  --val-manifest data/tiny_manifest.jsonl \
+  --tasks data/ood_surprise_tasks.jsonl \
+  --output artifacts/eval/jepa_correlation_demo.json
+```
+
+A strong **negative** correlation (e.g., ≤ −0.7) means lower JEPA loss predicts higher
+solve rates and can be used for model selection without running the full solver suite.
+Weak or positive correlations signal that the current JEPA objective is not aligned
+with downstream performance and warrants investigation (data quality, augmentations,
+projection head capacity, etc.).
+
+Each run emits a JSON summary (see `artifacts/eval/jepa_correlation_demo.json` for a
+sample) that records checkpoint paths, validation loss, solver success rate, average
+programs evaluated, and the overall correlation statistic.
+
 ### Meta-JEPA rule-family encoder
 
 `scripts/train_meta_jepa.py` now accepts `--val-split` (fraction of rule families reserved for validation), `--split-seed`, and `--early-stopping-*` CLI flags. Example:

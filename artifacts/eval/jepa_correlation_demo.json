@@ -1,0 +1,39 @@
+{
+  "jepa_config": "configs/training/jepa_tiny.yaml",
+  "val_manifest": "data/tiny_manifest.jsonl",
+  "task_source": "data/ood_surprise_tasks.jsonl",
+  "task_count": 6,
+  "results": [
+    {
+      "checkpoint": "artifacts/jepa/tiny_run/checkpoint_epoch_0001.pt",
+      "val_manifest": "data/tiny_manifest.jsonl",
+      "jepa_loss": 1.3623700141906738,
+      "task_source": "data/ood_surprise_tasks.jsonl",
+      "task_count": 6,
+      "successes": 0,
+      "success_rate": 0.0,
+      "avg_programs_tested": 8.0
+    },
+    {
+      "checkpoint": "artifacts/jepa/tiny_run/checkpoint_epoch_0002.pt",
+      "val_manifest": "data/tiny_manifest.jsonl",
+      "jepa_loss": 1.6732800006866455,
+      "task_source": "data/ood_surprise_tasks.jsonl",
+      "task_count": 6,
+      "successes": 0,
+      "success_rate": 0.0,
+      "avg_programs_tested": 8.0
+    },
+    {
+      "checkpoint": "artifacts/jepa/tiny_run/checkpoint_epoch_0003.pt",
+      "val_manifest": "data/tiny_manifest.jsonl",
+      "jepa_loss": 1.8580437898635864,
+      "task_source": "data/ood_surprise_tasks.jsonl",
+      "task_count": 6,
+      "successes": 0,
+      "success_rate": 0.0,
+      "avg_programs_tested": 8.0
+    }
+  ],
+  "pearson_correlation": 0.0
+}
