@@ -168,3 +168,17 @@ def test_embedding_metrics_emitted_when_interval_met():
     event = events[0]
     assert "context" in event and "target" in event
     assert event["context"]["variance"] >= 0.0
+
+
+def test_sigreg_loss_metrics_emitted_when_enabled():
+    config = config_with_optimizer()
+    config["sigreg"] = {"weight": 0.1, "num_slices": 3, "num_points": 5}
+    experiment = ObjectCentricJEPAExperiment(config)
+
+    context, target = build_sample_batch(experiment.context_length)
+    experiment.train_step(context, target)
+
+    events = experiment.consume_loss_metrics()
+    assert events, "expected per-step loss metrics"
+    assert events[-1]["sigreg"] >= 0.0
+    assert events[-1]["info_nce"] > 0.0

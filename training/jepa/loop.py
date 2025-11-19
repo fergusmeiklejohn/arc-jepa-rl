@@ -21,6 +21,7 @@ from .diagnostics import EmbeddingDiagnosticsConfig, EmbeddingDiagnosticsTracker
 from .relational_loss import RelationalConsistencyConfig, relational_consistency_loss
 from .trainer import ObjectCentricJEPATrainer
 from .object_pipeline import ObjectCentricEncoding, ObjectCentricJEPAEncoder, ObjectTokenBatch
+from .sigreg import SIGRegLoss, SIGRegLossConfig
 
 from training.modules.projection import InfoNCEQueue, ProjectionHead
 
@@ -145,6 +146,7 @@ class ObjectCentricJEPAExperiment:
         self._use_target_encoder = self.loss_config.use_target_encoder
         self.invariance_config = InvarianceLossConfig.from_mapping(config.get("invariance"))
         self.relational_config = RelationalConsistencyConfig.from_mapping(config.get("relational_loss"))
+        self.sigreg_config = SIGRegLossConfig.from_mapping(config.get("sigreg"))
 
         embedding_dim = self.trainer.encoder_config.hidden_dim
         self.projection_head = ProjectionHead(
@@ -153,6 +155,12 @@ class ObjectCentricJEPAExperiment:
             layers=self.loss_config.projection_layers,
             activation=self.loss_config.projection_activation,
         ).to(self.device)
+        self._sigreg_loss_module: SIGRegLoss | None = None
+        if self.sigreg_config.enabled:
+            self._sigreg_loss_module = SIGRegLoss(
+                num_slices=self.sigreg_config.num_slices,
+                num_points=self.sigreg_config.num_points,
+            ).to(self.device)
         self._target_encoder = None
         self._target_object_encoder = None
         self._target_projection_head = None
@@ -208,6 +216,8 @@ class ObjectCentricJEPAExperiment:
                 self.embedding_diagnostics_config,
                 codebook_size=codebook_size,
             )
+        self._loss_events: list[dict[str, object]] = []
+        self._loss_step = 0
 
     def _masked_mean(self, embeddings: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         mask = mask.unsqueeze(-1)
@@ -333,9 +343,21 @@ class ObjectCentricJEPAExperiment:
             else:
                 target_repr = self._encode_grids(target_grids)
                 target_proj = self.projection_head(target_repr)
-            loss = self._info_nce_loss(context_proj, target_proj)
+            info_nce_loss = self._info_nce_loss(context_proj, target_proj)
+        sigreg_penalty = self._sigreg_penalty(context_proj)
+        sigreg_contrib = None
+        total_loss = info_nce_loss
+        if sigreg_penalty is not None and self.sigreg_config.weight != 0.0:
+            sigreg_contrib = self.sigreg_config.weight * sigreg_penalty
+            total_loss = total_loss + sigreg_contrib
+        self._record_loss_components(
+            info_nce=info_nce_loss,
+            total=total_loss,
+            sigreg_raw=sigreg_penalty,
+            sigreg_weighted=sigreg_contrib,
+        )
         self._record_embedding_metrics(context_proj, target_proj)
-        return loss, context_repr, target_repr, target_proj
+        return total_loss, context_repr, target_repr, target_proj
 
     def _forward_from_token_batch(
         self,
@@ -355,10 +377,11 @@ class ObjectCentricJEPAExperiment:
             else:
                 target_repr, target_encoding = self._encode_tokenized_target(batch, return_encoding=True)  # type: ignore[assignment]
                 target_proj = self.projection_head(target_repr)
-            loss = self._info_nce_loss(context_proj, target_proj)
+            info_nce_loss = self._info_nce_loss(context_proj, target_proj)
+        total_loss = info_nce_loss
         invariance_loss = self._token_invariance_loss(batch, context_repr, target_repr)
         if invariance_loss is not None:
-            loss = loss + invariance_loss
+            total_loss = total_loss + invariance_loss
         relational_loss = self._relational_consistency_loss(
             context_encoding,
             target_encoding,
@@ -366,14 +389,27 @@ class ObjectCentricJEPAExperiment:
             context_length=batch.context_length,
         )
         if relational_loss is not None:
-            loss = loss + relational_loss
+            total_loss = total_loss + relational_loss
+        sigreg_penalty = self._sigreg_penalty(context_proj)
+        sigreg_contrib = None
+        if sigreg_penalty is not None and self.sigreg_config.weight != 0.0:
+            sigreg_contrib = self.sigreg_config.weight * sigreg_penalty
+            total_loss = total_loss + sigreg_contrib
+        self._record_loss_components(
+            info_nce=info_nce_loss,
+            total=total_loss,
+            sigreg_raw=sigreg_penalty,
+            sigreg_weighted=sigreg_contrib,
+            invariance=invariance_loss,
+            relational=relational_loss,
+        )
         self._record_embedding_metrics(
             context_proj,
             target_proj,
             context_encoding=context_encoding,
             target_encoding=target_encoding,
         )
-        return loss, context_repr, target_repr, target_proj
+        return total_loss, context_repr, target_repr, target_proj
 
     def _encode_tokenized_context(
         self,
@@ -653,3 +689,40 @@ class ObjectCentricJEPAExperiment:
         if self._embedding_tracker is None:
             return []
         return self._embedding_tracker.consume(flush=flush)
+
+    def consume_loss_metrics(self) -> list[dict[str, object]]:
+        events = self._loss_events
+        self._loss_events = []
+        return events
+
+    def _sigreg_penalty(self, context_proj: torch.Tensor) -> torch.Tensor | None:
+        if self._sigreg_loss_module is None:
+            return None
+        return self._sigreg_loss_module(context_proj)
+
+    def _record_loss_components(
+        self,
+        *,
+        info_nce: torch.Tensor,
+        total: torch.Tensor,
+        sigreg_raw: torch.Tensor | None,
+        sigreg_weighted: torch.Tensor | None,
+        invariance: torch.Tensor | None = None,
+        relational: torch.Tensor | None = None,
+    ) -> None:
+        event: dict[str, object] = {
+            "step": self._loss_step,
+            "info_nce": float(info_nce.detach().float().cpu().item()),
+            "total": float(total.detach().float().cpu().item()),
+            "sigreg": 0.0,
+        }
+        if sigreg_weighted is not None:
+            event["sigreg"] = float(sigreg_weighted.detach().float().cpu().item())
+        if sigreg_raw is not None:
+            event["sigreg_raw"] = float(sigreg_raw.detach().float().cpu().item())
+        if invariance is not None:
+            event["invariance"] = float(invariance.detach().float().cpu().item())
+        if relational is not None:
+            event["relational"] = float(relational.detach().float().cpu().item())
+        self._loss_events.append(event)
+        self._loss_step += 1

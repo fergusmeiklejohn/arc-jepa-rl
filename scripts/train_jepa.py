@@ -136,6 +136,20 @@ def main() -> None:
             if logger is not None:
                 logger.log_scalar("train/loss", epoch_loss, step=epoch)
 
+            loss_events = experiment.consume_loss_metrics()
+            if logger is not None:
+                for event in loss_events:
+                    scalars = {
+                        "info_nce": float(event.get("info_nce", 0.0)),
+                        "total": float(event.get("total", 0.0)),
+                        "sigreg": float(event.get("sigreg", 0.0)),
+                    }
+                    if "invariance" in event:
+                        scalars["invariance"] = float(event["invariance"])
+                    if "relational" in event:
+                        scalars["relational"] = float(event["relational"])
+                    logger.log_scalars("loss", scalars, step=int(event.get("step", epoch)))
+
             events = experiment.consume_embedding_metrics()
             _handle_embedding_events(events)
 

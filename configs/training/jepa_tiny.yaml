@@ -55,3 +55,8 @@ loss:
   projection_dim: 32
   projection_layers: 2
   projection_activation: "relu"
+
+sigreg:
+  weight: 0.0
+  num_slices: 64
+  num_points: 17
