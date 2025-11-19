@@ -21,6 +21,7 @@ except Exception:  # pragma: no cover
 
 from training.jepa import ObjectCentricJEPAExperiment, load_jepa_config
 from scripts._jepa_loader import build_jepa_dataloader
+from training.utils import EarlyStopping, EarlyStoppingConfig
 
 
 def parse_args() -> argparse.Namespace:
@@ -61,10 +62,15 @@ def main() -> None:
     if torch is None:
         raise RuntimeError("PyTorch is required for full JEPA training")
 
-    data_loader, manifest_path, tokenized_path = build_jepa_dataloader(
+    train_loader, val_loader, manifest_path, tokenized_path = build_jepa_dataloader(
         config,
         experiment.trainer.tokenizer_config,
     )
+
+    early_stopping_cfg = EarlyStoppingConfig.from_mapping(training_cfg.get("early_stopping"))
+    if early_stopping_cfg.enabled and val_loader is None:
+        raise ValueError("training.early_stopping.enabled requires data.validation.split to be configured")
+    early_stopper = EarlyStopping(early_stopping_cfg)
 
     epochs = int(training_cfg.get("epochs", 1))
 
@@ -94,7 +100,8 @@ def main() -> None:
             )
 
     losses: list[float] = []
-    assert data_loader is not None
+    val_losses: list[float] = []
+    assert train_loader is not None
 
     embedding_metrics_handle = None
     embedding_metrics_path = checkpoint_dir / "embedding_metrics.jsonl"
@@ -128,13 +135,29 @@ def main() -> None:
         embedding_metrics_handle.flush()
 
     try:
+        completed_epochs = 0
         for epoch in range(1, epochs + 1):
-            epoch_loss = experiment.train_epoch(data_loader)
+            epoch_loss = experiment.train_epoch(train_loader)
             losses.append(epoch_loss)
             print(f"Epoch {epoch}/{epochs}: loss={epoch_loss:.6f}")
 
             if logger is not None:
                 logger.log_scalar("train/loss", epoch_loss, step=epoch)
+
+            val_loss = None
+            stop_training = False
+            if val_loader is not None:
+                val_loss = experiment.evaluate_epoch(val_loader)
+                val_losses.append(val_loss)
+                print(f"  Validation loss: {val_loss:.6f}")
+                if logger is not None:
+                    logger.log_scalar("val/loss", val_loss, step=epoch)
+                if early_stopper.update(val_loss, step=epoch):
+                    stop_training = True
+                    print(
+                        "  Early stopping triggered: "
+                        f"best_val={early_stopper.best_metric:.6f} at epoch {early_stopper.best_step}",
+                    )
 
             loss_events = experiment.consume_loss_metrics()
             if logger is not None:
@@ -166,6 +189,9 @@ def main() -> None:
                 },
                 checkpoint_path,
             )
+            completed_epochs = epoch
+            if stop_training:
+                break
 
         final_events = experiment.consume_embedding_metrics(flush=True)
         _handle_embedding_events(final_events)
@@ -180,9 +206,13 @@ def main() -> None:
         "manifest": str(manifest_path) if manifest_path is not None else None,
         "tokenized_dataset": str(tokenized_path) if tokenized_path is not None else None,
         "epochs": epochs,
+        "completed_epochs": completed_epochs,
         "batch_size": int(training_cfg.get("batch_size", 32)),
         "device": device,
         "losses": losses,
+        "val_losses": val_losses if val_losses else None,
+        "best_val_loss": early_stopper.best_metric if val_losses else None,
+        "early_stopping_epoch": early_stopper.stopped_step,
     }
     metrics_path = checkpoint_dir / "metrics.json"
     metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")

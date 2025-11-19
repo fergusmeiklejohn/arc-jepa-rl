@@ -12,13 +12,16 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from envs import TorchUnavailableError
 from training.eval import (
     EvaluationSuite,
     EvaluationVariant,
     build_summary,
     load_arc_dev_tasks,
     load_synthetic_tasks_jsonl,
+    LatentDistanceTracker,
 )
+from training.rllib_utils.builders import build_latent_scorer_from_config
 
 
 def parse_args() -> argparse.Namespace:
@@ -59,10 +62,47 @@ def parse_args() -> argparse.Namespace:
         default=3,
         help="Maximum program size for the default DSL-only ablation",
     )
+    parser.add_argument(
+        "--latent-config",
+        type=Path,
+        default=None,
+        help="Optional JEPA config to enable latent distance tracking",
+    )
+    parser.add_argument(
+        "--latent-device",
+        type=str,
+        default="cpu",
+        help="Torch device to use for latent distance tracking (default: cpu)",
+    )
+    parser.add_argument(
+        "--latent-metric",
+        type=str,
+        default="cosine",
+        choices=("cosine", "l2"),
+        help="Latent distance metric (matches LatentScorer.metric)",
+    )
     args = parser.parse_args()
     if bool(args.tasks) == bool(args.arc_dev_root):
         parser.error("Specify exactly one of --tasks or --arc-dev-root")
     return args
+
+
+def _build_latent_tracker(
+    config_path: Path | str,
+    *,
+    device: str,
+    metric: str,
+) -> LatentDistanceTracker:
+    scorer = build_latent_scorer_from_config(config_path, device=device)
+
+    def embed(grid):
+        return scorer.embed(grid)
+
+    def distance(a, b):
+        value = scorer.distance(a, b, metric=metric)
+        return float(value.item() if hasattr(value, "item") else value)
+
+    return LatentDistanceTracker(embed, distance)
 
 
 def build_default_variants(top_k: int, max_nodes: int) -> List[EvaluationVariant]:
@@ -94,7 +134,18 @@ def main() -> None:
     if not tasks:
         raise RuntimeError("No evaluation tasks provided")
 
-    suite = EvaluationSuite(tasks)
+    latent_tracker = None
+    if args.latent_config:
+        try:
+            latent_tracker = _build_latent_tracker(
+                args.latent_config,
+                device=args.latent_device,
+                metric=args.latent_metric,
+            )
+        except TorchUnavailableError as exc:  # pragma: no cover - depends on torch install
+            raise RuntimeError("Latent distance tracking requires PyTorch") from exc
+
+    suite = EvaluationSuite(tasks, latent_tracker=latent_tracker)
     variants = build_default_variants(args.top_k, args.max_nodes)
     results = suite.run(variants)
 

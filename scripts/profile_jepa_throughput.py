@@ -219,7 +219,7 @@ def _try_build_loader(
     batch_size: int,
 ) -> tuple[Iterable[object], str, str | None]:
     try:
-        dataloader, manifest_path, tokenized_path = build_jepa_dataloader(
+        dataloader, _, manifest_path, tokenized_path = build_jepa_dataloader(
             config,
             experiment.trainer.tokenizer_config,
         )

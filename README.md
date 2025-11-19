@@ -24,6 +24,7 @@ and evaluate out-of-distribution reasoning.
   - `generate_dataset.py` — Build synthetic manifests; supports curriculum schedules and `allowed_primitives` constraints.
   - `train_jepa.py` — Run manifest-backed JEPA pretraining (supports `--dry-run` and `--device`).
   - `train_meta_jepa.py` — Train the rule-family encoder on JSONL tasks with contrastive loss.
+  - `train_guidance.py` — Fit the DSL neural guidance scorer on synthetic tasks using a JEPA encoder for latent features.
   - `train_hierarchical.py` — Launch RLlib PPO over the latent option environment using configs under `configs/training/rl/`.
   - `evaluate_arc.py` — Run the evaluation/ablation suite and emit JSON metrics.
 - `tests/` — Unit and integration tests covering generators, models, and envs.
@@ -178,6 +179,56 @@ For full A6000 runs, start from `configs/training/jepa_pretrain_gpu.yaml`; it se
 Mixed precision is controlled via `training.amp` in the config. Set it to `true` on CUDA hosts to enable `torch.cuda.amp` autocast + GradScaler; the loop automatically reverts to FP32 if CUDA/AMP is unavailable (or when forcing `--device cpu`).
 
 **BYOL-style target encoder:** set `loss.use_target_encoder=true` and `loss.target_ema_decay=<0-1]` in the JEPA config to enable a stop-gradient EMA copy of the encoder/projection head. The training loop automatically keeps the target network in sync via EMA updates and routes the contrastive loss through the stabilized branch.
+
+**Validation splits & early stopping:** set `data.validation.split` (alias `split_ratio`) to carve off a deterministic validation subset from the manifest/tokenized dataset. Optional keys include `batch_size` and `seed` for per-split loader overrides. Pair it with a `training.early_stopping` block to halt runs when the validation InfoNCE loss stops improving:
+
+```yaml
+data:
+  validation:
+    split: 0.1        # reserve 10% of samples for validation
+    batch_size: 128   # optional override
+    seed: 17          # deterministic split seed
+
+training:
+  early_stopping:
+    enabled: true
+    patience: 4
+    min_delta: 1.0e-3
+```
+
+`train_jepa.py` logs `val/loss` to TensorBoard when enabled, includes validation curves in `metrics.json`, and stops once the patience budget is exhausted. Early stopping requires a validation split.
+
+### Meta-JEPA rule-family encoder
+
+`scripts/train_meta_jepa.py` now accepts `--val-split` (fraction of rule families reserved for validation), `--split-seed`, and `--early-stopping-*` CLI flags. Example:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/train_meta_jepa.py \
+  --tasks artifacts/synthetic/pilot.jsonl \
+  --epochs 30 --batch-size 64 --lr 5e-4 \
+  --val-split 0.15 --split-seed 13 \
+  --early-stopping-patience 5 --early-stopping-min-delta 5e-4
+```
+
+The trainer reports both training/validation losses per epoch and stops once validation does not improve within the configured patience window. Early stopping requires a non-zero validation split.
+
+### DSL guidance scorer
+
+`scripts/train_guidance.py` honours the `train.validation_split`, `train.split_seed`, and `train.early_stopping` keys in the DSL guidance YAML file:
+
+```yaml
+train:
+  epochs: 25
+  batch_size: 64
+  validation_split: 0.2
+  split_seed: 21
+  early_stopping:
+    enabled: true
+    patience: 6
+    min_delta: 5e-4
+```
+
+The script automatically builds train/validation DataLoaders, prints `Validation loss` per epoch, and short-circuits when the patience budget expires.
 
 ### Hierarchical option training (RLlib)
 

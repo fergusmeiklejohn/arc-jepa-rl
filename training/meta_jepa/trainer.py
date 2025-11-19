@@ -8,6 +8,7 @@ from typing import Iterable, List, Mapping, Sequence, Tuple
 try:  # pragma: no cover - torch optional
     import torch
     from torch.utils.data import DataLoader
+    import torch.utils.data
     import torch.nn.functional as F
 except Exception:  # pragma: no cover
     torch = None  # type: ignore
@@ -23,6 +24,7 @@ from .data import (
     build_rule_family_dataset,
 )
 from .model import MetaJEPAModel, contrastive_loss
+from training.utils import EarlyStopping, EarlyStoppingConfig
 
 
 def _ensure_torch() -> None:
@@ -42,11 +44,15 @@ class TrainingConfig:
     relational_weight: float = 0.0
     weight_decay: float = 0.0
     device: str = "cpu"
+    validation_split: float = 0.0
+    split_seed: int | None = None
+    early_stopping: EarlyStoppingConfig = EarlyStoppingConfig()
 
 
 @dataclass
 class TrainingResult:
     history: List[float]
+    val_history: List[float]
     vocabulary: PrimitiveVocabulary
     dataset: RuleFamilyDataset
     temperature: float
@@ -130,11 +136,45 @@ class MetaJEPATrainer:
             weight_decay=config.weight_decay,
         )
 
+        train_dataset = self.dataset
+        val_dataset = None
+        if config.validation_split:
+            val_ratio = float(config.validation_split)
+            if not 0.0 < val_ratio < 1.0:
+                raise ValueError("validation_split must be between 0 and 1")
+            dataset_len = len(train_dataset)
+            val_size = max(1, int(round(dataset_len * val_ratio)))
+            if val_size >= dataset_len:
+                raise ValueError("validation_split leaves no training samples")
+            train_size = dataset_len - val_size
+            generator = None
+            if config.split_seed is not None:
+                generator = torch.Generator()
+                generator.manual_seed(int(config.split_seed))
+            train_subset, val_subset = torch.utils.data.random_split(
+                train_dataset,
+                [train_size, val_size],
+                generator=generator,
+            )
+            train_dataset = train_subset  # type: ignore[assignment]
+            val_dataset = val_subset  # type: ignore[assignment]
+
         loader = DataLoader(
-            self.dataset,
-            batch_size=min(config.batch_size, len(self.dataset)),
+            train_dataset,
+            batch_size=min(config.batch_size, len(train_dataset)),
             shuffle=True,
         )
+        val_loader = None
+        if val_dataset is not None:
+            val_loader = DataLoader(
+                val_dataset,
+                batch_size=min(config.batch_size, len(val_dataset)),
+                shuffle=False,
+            )
+
+        early_stopper = EarlyStopping(config.early_stopping)
+        if config.early_stopping.enabled and val_loader is None:
+            raise ValueError("validation_split must be > 0 when early stopping is enabled")
 
         def current_temperature() -> "torch.Tensor":
             temperature = torch.exp(log_temperature)
@@ -143,9 +183,10 @@ class MetaJEPATrainer:
             return temperature
 
         history: List[float] = []
+        val_history: List[float] = []
         model.train()
         use_relational = bool(config.relational_weight > 0 and getattr(self.model, "relational_decoder", None))
-        for _ in range(config.epochs):
+        for epoch in range(1, config.epochs + 1):
             epoch_loss = 0.0
             batches = 0
             for features, labels, adjacency in loader:
@@ -169,14 +210,62 @@ class MetaJEPATrainer:
                     epoch_loss += float(loss.item())
                     batches += 1
             history.append(epoch_loss / max(1, batches))
+            if val_loader is not None:
+                val_loss = self._evaluate_validation(
+                    model,
+                    val_loader,
+                    device,
+                    current_temperature,
+                    use_relational=use_relational,
+                    relational_weight=config.relational_weight,
+                )
+                val_history.append(val_loss)
+                if early_stopper.update(val_loss, step=epoch):
+                    break
 
         final_temperature = float(current_temperature().detach().cpu().item())
         return TrainingResult(
             history=history,
+            val_history=val_history,
             vocabulary=self.vocabulary,
             dataset=self.dataset,
             temperature=final_temperature,
         )
+
+    def _evaluate_validation(
+        self,
+        model: MetaJEPAModel,
+        loader: DataLoader,
+        device: "torch.device",
+        temperature_fn,
+        *,
+        use_relational: bool,
+        relational_weight: float,
+    ) -> float:
+        state = model.training
+        model.eval()
+        total_loss = 0.0
+        batches = 0
+        with torch.no_grad():
+            temperature = temperature_fn()
+            for features, labels, adjacency in loader:
+                features = features.to(device)
+                labels = labels.to(device)
+                adjacency = adjacency.to(device)
+                embeddings, relational_logits = model(
+                    features,
+                    adjacency=adjacency,
+                    return_relations=use_relational,
+                )
+                loss = contrastive_loss(embeddings, labels, temperature=temperature)
+                if use_relational and relational_logits is not None:
+                    relational_loss = F.binary_cross_entropy_with_logits(relational_logits, adjacency)
+                    loss = loss + relational_weight * relational_loss
+                total_loss += float(loss.item())
+                batches += 1
+        if state:
+            model.train()
+        return total_loss / max(1, batches)
 
     def encode(
         self,

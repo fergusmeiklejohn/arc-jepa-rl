@@ -13,6 +13,8 @@ from training.dsl.primitives import PrimitiveRegistry, build_default_primitive_r
 from training.meta_jepa.data import RuleFamilyExample, build_rule_family_examples
 from training.solver import FewShotSolver
 
+from .latents import LatentDistanceRecord, LatentDistanceTracker
+
 
 @dataclass(frozen=True)
 class EvaluationVariant:
@@ -35,6 +37,7 @@ class TaskEvaluation:
     novel_rule: bool | None = None
     solver_signature: Tuple[str, ...] | None = None
     reference_signature: Tuple[str, ...] | None = None
+    latent_distances: Sequence[LatentDistanceRecord] | None = None
 
 
 @dataclass(frozen=True)
@@ -79,6 +82,17 @@ class VariantMetrics:
                     "reference_signature": list(detail.reference_signature)
                     if detail.reference_signature is not None
                     else None,
+                    "latent_distances": [
+                        {
+                            "type": distance.example_kind,
+                            "index": distance.index,
+                            "start": distance.start_distance,
+                            "final": distance.final_distance,
+                        }
+                        for distance in detail.latent_distances
+                    ]
+                    if detail.latent_distances
+                    else None,
                 }
                 for detail in self.details
             ],
@@ -88,7 +102,7 @@ class VariantMetrics:
 class EvaluationSuite:
     """Runs ablation variants over a collection of ARC tasks."""
 
-    def __init__(self, tasks: Sequence[SyntheticTask]) -> None:
+    def __init__(self, tasks: Sequence[SyntheticTask], *, latent_tracker: LatentDistanceTracker | None = None) -> None:
         if not tasks:
             raise ValueError("EvaluationSuite requires at least one task")
         self.tasks = list(tasks)
@@ -97,6 +111,7 @@ class EvaluationSuite:
             self._family_examples = build_rule_family_examples(traced_tasks, min_family_size=1)
         else:
             self._family_examples = []
+        self._latent_tracker = latent_tracker
 
     def run(self, variants: Sequence[EvaluationVariant]) -> List[VariantMetrics]:
         if not variants:
@@ -140,6 +155,13 @@ class EvaluationSuite:
                 if novel_rule:
                     novel_discoveries += 1
 
+            latent_distances = self._latent_distances(
+                solver,
+                result.program,
+                examples,
+                tests,
+            )
+
             details.append(
                 TaskEvaluation(
                     task_id=task.task_id,
@@ -148,6 +170,7 @@ class EvaluationSuite:
                     novel_rule=novel_rule,
                     solver_signature=solver_signature,
                     reference_signature=reference_signature,
+                    latent_distances=latent_distances,
                 )
             )
 
@@ -260,6 +283,55 @@ class EvaluationSuite:
                 continue
             names.append(primitive.name)
         return tuple(names)
+
+    def _latent_distances(
+        self,
+        solver: FewShotSolver,
+        program: Program | None,
+        train_examples: Sequence[Tuple[Grid, Grid]],
+        test_examples: Sequence[Tuple[Grid, Grid | None]],
+    ) -> Sequence[LatentDistanceRecord] | None:
+        if self._latent_tracker is None:
+            return None
+
+        records: List[LatentDistanceRecord] = []
+
+        def predict(grid: Grid) -> Grid | None:
+            if program is None:
+                return None
+            try:
+                result = solver.interpreter.evaluate(program, {"grid": grid})
+            except Exception:
+                return None
+            if isinstance(result, Grid):
+                return result
+            return None
+
+        for idx, (input_grid, target_grid) in enumerate(train_examples):
+            record = self._latent_tracker.record(
+                "train",
+                idx,
+                start=input_grid,
+                target=target_grid,
+                prediction=predict(input_grid),
+            )
+            if record is not None:
+                records.append(record)
+
+        for idx, (input_grid, target_grid) in enumerate(test_examples):
+            if target_grid is None:
+                continue
+            record = self._latent_tracker.record(
+                "test",
+                idx,
+                start=input_grid,
+                target=target_grid,
+                prediction=predict(input_grid),
+            )
+            if record is not None:
+                records.append(record)
+
+        return tuple(records) if records else None
 
     @staticmethod
     def _reference_signature(task: object) -> Tuple[str, ...] | None:

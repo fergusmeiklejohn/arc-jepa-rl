@@ -218,6 +218,7 @@ class ObjectCentricJEPAExperiment:
             )
         self._loss_events: list[dict[str, object]] = []
         self._loss_step = 0
+        self._metrics_enabled = True
 
     def _masked_mean(self, embeddings: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         mask = mask.unsqueeze(-1)
@@ -492,13 +493,7 @@ class ObjectCentricJEPAExperiment:
             pending_targets.clear()
 
         for batch in dataset:
-            if isinstance(batch, GridPairBatch):
-                loss_tensor, _, _, target_proj = self._forward_from_grids(batch.context, batch.target)
-            elif isinstance(batch, TokenizedPairBatch):
-                moved = batch.to(self.device, non_blocking=self._use_non_blocking)
-                loss_tensor, _, _, target_proj = self._forward_from_token_batch(moved)
-            else:
-                raise TypeError(f"Unsupported batch type: {type(batch)}")
+            loss_tensor, target_proj, _ = self._forward_batch_loss(batch)
 
             total_loss += float(loss_tensor.detach().float().cpu().item())
             pending_losses.append(loss_tensor)
@@ -515,6 +510,43 @@ class ObjectCentricJEPAExperiment:
             _apply_pending()
 
         return total_loss / batches
+
+    def evaluate_epoch(
+        self,
+        dataset: Iterable[GridPairBatch | TokenizedPairBatch],
+    ) -> float:
+        if torch is None:  # pragma: no cover - safety guard
+            raise RuntimeError("PyTorch is required for JEPA evaluation")
+        total_loss = 0.0
+        batches = 0
+        previous_metrics_state = self._metrics_enabled
+        self._metrics_enabled = False
+        try:
+            with torch.no_grad():
+                for batch in dataset:
+                    loss_tensor, _, _ = self._forward_batch_loss(batch)
+                    total_loss += float(loss_tensor.detach().float().cpu().item())
+                    batches += 1
+        finally:
+            self._metrics_enabled = previous_metrics_state
+        if batches == 0:
+            raise ValueError("dataset yielded no batches")
+        return total_loss / batches
+
+    def _forward_batch_loss(
+        self,
+        batch: GridPairBatch | TokenizedPairBatch,
+    ) -> tuple[torch.Tensor, torch.Tensor, int]:
+        if isinstance(batch, GridPairBatch):
+            loss_tensor, _, _, target_proj = self._forward_from_grids(batch.context, batch.target)
+            batch_size = len(batch.target)
+        elif isinstance(batch, TokenizedPairBatch):
+            moved = batch.to(self.device, non_blocking=self._use_non_blocking)
+            loss_tensor, _, _, target_proj = self._forward_from_token_batch(moved)
+            batch_size = moved.context_features.size(0)
+        else:
+            raise TypeError(f"Unsupported batch type: {type(batch)}")
+        return loss_tensor, target_proj, batch_size
 
     def train(
         self,
@@ -676,6 +708,8 @@ class ObjectCentricJEPAExperiment:
         context_encoding: ObjectCentricEncoding | None = None,
         target_encoding: ObjectCentricEncoding | None = None,
     ) -> None:
+        if not self._metrics_enabled:
+            return
         if self._embedding_tracker is None:
             return
         self._embedding_tracker.observe(
@@ -710,6 +744,8 @@ class ObjectCentricJEPAExperiment:
         invariance: torch.Tensor | None = None,
         relational: torch.Tensor | None = None,
     ) -> None:
+        if not self._metrics_enabled:
+            return
         event: dict[str, object] = {
             "step": self._loss_step,
             "info_nce": float(info_nce.detach().float().cpu().item()),

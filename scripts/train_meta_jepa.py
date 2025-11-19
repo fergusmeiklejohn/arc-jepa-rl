@@ -12,6 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from training.eval import load_synthetic_tasks_jsonl
 from training.meta_jepa import MetaJEPATrainer, TrainingConfig, build_rule_family_examples
+from training.utils import EarlyStoppingConfig
 
 try:  # pragma: no cover - optional dependency
     import torch
@@ -68,6 +69,30 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--device", type=str, default="cpu", help="Torch device (default: cpu)")
     parser.add_argument("--min-family-size", type=int, default=2, help="Minimum examples per rule family")
+    parser.add_argument(
+        "--val-split",
+        type=float,
+        default=0.0,
+        help="Fraction of data reserved for validation (0 disables)",
+    )
+    parser.add_argument(
+        "--split-seed",
+        type=int,
+        default=None,
+        help="Optional seed for deterministic train/val splitting",
+    )
+    parser.add_argument(
+        "--early-stopping-patience",
+        type=int,
+        default=0,
+        help="Stop after N epochs without validation improvement (0 disables)",
+    )
+    parser.add_argument(
+        "--early-stopping-min-delta",
+        type=float,
+        default=0.0,
+        help="Minimum improvement in validation loss to reset patience",
+    )
     parser.add_argument("--output", type=Path, default=None, help="Optional path to write trained weights (.pt)")
     return parser.parse_args()
 
@@ -91,6 +116,14 @@ def main() -> None:
             "relational_decoder": args.enable_relational_task or args.relational_weight > 0,
         },
     )
+    if args.early_stopping_patience > 0 and args.val_split <= 0:
+        raise ValueError("--early-stopping-patience requires --val-split > 0")
+    early_stopping_cfg = EarlyStoppingConfig(
+        enabled=args.early_stopping_patience > 0,
+        patience=max(1, args.early_stopping_patience or 1),
+        min_delta=max(0.0, args.early_stopping_min_delta),
+        mode="min",
+    )
     config = TrainingConfig(
         lr=args.lr,
         batch_size=args.batch_size,
@@ -101,12 +134,19 @@ def main() -> None:
         learnable_temperature=args.learnable_temperature,
         relational_weight=args.relational_weight,
         device=args.device,
+        validation_split=max(0.0, args.val_split),
+        split_seed=args.split_seed,
+        early_stopping=early_stopping_cfg,
     )
     result = trainer.fit(config)
 
     print("Finished training Meta-JEPA")
     for epoch, loss in enumerate(result.history, start=1):
         print(f"Epoch {epoch}: loss={loss:.4f}")
+    if result.val_history:
+        for epoch, loss in enumerate(result.val_history, start=1):
+            print(f"  Val {epoch}: loss={loss:.4f}")
+        print(f"Best validation loss: {min(result.val_history):.4f}")
     print(f"Final temperature: {result.temperature:.4f}")
 
     if args.output:

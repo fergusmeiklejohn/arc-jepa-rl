@@ -25,6 +25,7 @@ from training.dsl import (
 )
 from training.jepa import ObjectCentricJEPATrainer
 from training.modules.projection import ProjectionHead
+from training.utils import EarlyStopping, EarlyStoppingConfig
 
 try:  # pragma: no cover - optional dependency at runtime
     import torch
@@ -128,12 +129,63 @@ def main() -> None:
     batch_size = int(train_cfg.get("batch_size", 32))
     lr = float(train_cfg.get("lr", 1e-3))
     weight_decay = float(train_cfg.get("weight_decay", 0.0))
+    val_split = float(train_cfg.get("validation_split", 0.0))
+    split_seed = train_cfg.get("split_seed", train_cfg.get("seed", dsl_cfg.get("seed")))
+    train_dataset = dataset
+    val_dataset = None
+    if val_split:
+        if not 0.0 < val_split < 1.0:
+            raise ValueError("train.validation_split must be between 0 and 1")
+        total = len(dataset)
+        if total < 2:
+            raise ValueError("guidance dataset too small for validation split")
+        val_size = max(1, int(round(total * val_split)))
+        if val_size >= total:
+            raise ValueError("validation split leaves no training samples")
+        train_size = total - val_size
+        generator = None
+        if split_seed is not None:
+            generator = torch.Generator()
+            generator.manual_seed(int(split_seed))
+        train_subset, val_subset = torch.utils.data.random_split(
+            dataset,
+            [train_size, val_size],
+            generator=generator,
+        )
+        train_dataset = train_subset  # type: ignore[assignment]
+        val_dataset = val_subset  # type: ignore[assignment]
 
     scorer = GuidanceScorer(feature_dim, hidden_dim=int(dsl_cfg.get("model", {}).get("hidden_dim", 128)))
     scorer.to(device)
 
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = None
+    if val_dataset is not None:
+        val_batch = min(batch_size, len(val_dataset))
+        val_loader = DataLoader(val_dataset, batch_size=val_batch, shuffle=False)
     optimizer = torch.optim.Adam(scorer.parameters(), lr=lr, weight_decay=weight_decay)
+    early_cfg = EarlyStoppingConfig.from_mapping(train_cfg.get("early_stopping"))
+    early_stopper = EarlyStopping(early_cfg)
+    if early_cfg.enabled and val_loader is None:
+        raise ValueError("train.early_stopping.enabled requires train.validation_split > 0")
+    val_losses: list[float] = []
+
+    def _evaluate(loader: DataLoader) -> float:
+        state = scorer.training
+        scorer.eval()
+        total_loss = 0.0
+        batches = 0
+        with torch.no_grad():
+            for vectors, labels, _ in loader:
+                vectors = vectors.to(device)
+                labels = labels.to(device)
+                preds = scorer(vectors)
+                loss = torch.nn.functional.mse_loss(preds, labels)
+                total_loss += float(loss.item())
+                batches += 1
+        if state:
+            scorer.train()
+        return total_loss / max(1, batches)
 
     for epoch in range(1, epochs + 1):
         scorer.train()
@@ -152,10 +204,25 @@ def main() -> None:
 
         avg_loss = epoch_loss / max(1, batches)
         print(f"Epoch {epoch}/{epochs} - loss={avg_loss:.4f}")
+        stop_training = False
+        if val_loader is not None:
+            val_loss = _evaluate(val_loader)
+            val_losses.append(val_loss)
+            print(f"  Validation loss: {val_loss:.4f}")
+            if early_stopper.update(val_loss, step=epoch):
+                print(
+                    "  Early stopping triggered at epoch"
+                    f" {epoch} (best val {early_stopper.best_metric:.4f})",
+                )
+                stop_training = True
+        if stop_training:
+            break
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     torch.save({"model_state": scorer.state_dict(), "feature_dim": feature_dim}, args.output)
     print(f"Saved guidance model to {args.output}")
+    if val_losses:
+        print(f"Best validation loss: {min(val_losses):.4f}")
 
 
 if __name__ == "__main__":

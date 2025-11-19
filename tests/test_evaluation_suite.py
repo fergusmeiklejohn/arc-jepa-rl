@@ -1,5 +1,5 @@
 from arcgen import Grid, ProgramStep, SyntheticTask
-from training.eval import ArcExample, ArcTask, EvaluationSuite, EvaluationVariant
+from training.eval import ArcExample, ArcTask, EvaluationSuite, EvaluationVariant, LatentDistanceTracker
 
 
 def make_task(task_id: str, primitive: str):
@@ -74,3 +74,23 @@ def test_evaluation_suite_marks_failed_test_predictions():
 
     assert result.successes == 0
     assert not result.details[0].success
+
+
+def test_evaluation_suite_emits_latent_distances():
+    train_examples = (ArcExample(Grid([[1, 0]]), Grid([[1, 0]])),)
+    test_examples = (ArcExample(Grid([[0, 1]]), Grid([[0, 1]])),)
+    task = ArcTask(task_id="latent_task", train_examples=train_examples, test_examples=test_examples)
+
+    tracker = LatentDistanceTracker(
+        lambda grid: float(sum(sum(row) for row in grid.cells)),
+        lambda a, b: abs(float(a) - float(b)),
+    )
+
+    suite = EvaluationSuite([task], latent_tracker=tracker)
+    variant = EvaluationVariant(name="arc_dev", description="dev harness", max_nodes=2)
+    result = suite.run([variant])[0]
+
+    detail = result.details[0]
+    assert detail.latent_distances is not None
+    assert len(detail.latent_distances) == 2
+    assert all(record.final_distance == 0.0 for record in detail.latent_distances)
