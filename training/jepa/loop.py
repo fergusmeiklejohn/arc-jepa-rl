@@ -17,6 +17,7 @@ from .invariance import (
     symmetry_flipped_batch,
     translated_batch,
 )
+from .diagnostics import EmbeddingDiagnosticsConfig, EmbeddingDiagnosticsTracker
 from .relational_loss import RelationalConsistencyConfig, relational_consistency_loss
 from .trainer import ObjectCentricJEPATrainer
 from .object_pipeline import ObjectCentricEncoding, ObjectCentricJEPAEncoder, ObjectTokenBatch
@@ -189,6 +190,25 @@ class ObjectCentricJEPAExperiment:
             weight_decay=opt_cfg.weight_decay,
         )
 
+        diagnostics_cfg = config.get("diagnostics")
+        if diagnostics_cfg is not None and not isinstance(diagnostics_cfg, Mapping):
+            raise ValueError("config['diagnostics'] must be a mapping when provided")
+        embedding_diag_cfg = None
+        if isinstance(diagnostics_cfg, Mapping):
+            raw = diagnostics_cfg.get("embedding_metrics")
+            if raw is not None and not isinstance(raw, Mapping):
+                raise ValueError("diagnostics.embedding_metrics must be a mapping when provided")
+            embedding_diag_cfg = raw
+        self.embedding_diagnostics_config = EmbeddingDiagnosticsConfig.from_mapping(embedding_diag_cfg)
+        self._embedding_tracker: EmbeddingDiagnosticsTracker | None = None
+        if self.embedding_diagnostics_config.enabled:
+            num_embeddings = self.trainer.encoder_config.num_embeddings
+            codebook_size = int(num_embeddings) if num_embeddings is not None else None
+            self._embedding_tracker = EmbeddingDiagnosticsTracker(
+                self.embedding_diagnostics_config,
+                codebook_size=codebook_size,
+            )
+
     def _masked_mean(self, embeddings: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         mask = mask.unsqueeze(-1)
         summed = (embeddings * mask).sum(dim=1)
@@ -314,6 +334,7 @@ class ObjectCentricJEPAExperiment:
                 target_repr = self._encode_grids(target_grids)
                 target_proj = self.projection_head(target_repr)
             loss = self._info_nce_loss(context_proj, target_proj)
+        self._record_embedding_metrics(context_proj, target_proj)
         return loss, context_repr, target_repr, target_proj
 
     def _forward_from_token_batch(
@@ -346,6 +367,12 @@ class ObjectCentricJEPAExperiment:
         )
         if relational_loss is not None:
             loss = loss + relational_loss
+        self._record_embedding_metrics(
+            context_proj,
+            target_proj,
+            context_encoding=context_encoding,
+            target_encoding=target_encoding,
+        )
         return loss, context_repr, target_repr, target_proj
 
     def _encode_tokenized_context(
@@ -604,3 +631,25 @@ class ObjectCentricJEPAExperiment:
             context_length=context_length,
             config=self.relational_config,
         )
+
+    def _record_embedding_metrics(
+        self,
+        context_proj: torch.Tensor,
+        target_proj: torch.Tensor,
+        *,
+        context_encoding: ObjectCentricEncoding | None = None,
+        target_encoding: ObjectCentricEncoding | None = None,
+    ) -> None:
+        if self._embedding_tracker is None:
+            return
+        self._embedding_tracker.observe(
+            context_proj=context_proj,
+            target_proj=target_proj,
+            context_encoding=context_encoding,
+            target_encoding=target_encoding,
+        )
+
+    def consume_embedding_metrics(self, *, flush: bool = False) -> list[dict[str, object]]:
+        if self._embedding_tracker is None:
+            return []
+        return self._embedding_tracker.consume(flush=flush)

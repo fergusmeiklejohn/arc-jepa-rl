@@ -47,6 +47,12 @@ logging:
   log_dir: artifacts/jepa/pretrain/tensorboard
   flush_secs: 15
 
+diagnostics:
+  embedding_metrics:
+    enabled: true
+    interval: 200
+    max_samples: 4096
+
 augmentations:
   mask_ratio: 0.2
   random_crop_radius: 1

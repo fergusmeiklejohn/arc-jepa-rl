@@ -80,3 +80,9 @@ logging:
   log_dir: artifacts/jepa/pretrain_gpu/tensorboard
   flush_secs: 10
   run_name: jepa_gpu
+
+diagnostics:
+  embedding_metrics:
+    enabled: true
+    interval: 200
+    max_samples: 4096

@@ -96,30 +96,70 @@ def main() -> None:
     losses: list[float] = []
     assert data_loader is not None
 
-    for epoch in range(1, epochs + 1):
-        epoch_loss = experiment.train_epoch(data_loader)
-        losses.append(epoch_loss)
-        print(f"Epoch {epoch}/{epochs}: loss={epoch_loss:.6f}")
+    embedding_metrics_handle = None
+    embedding_metrics_path = checkpoint_dir / "embedding_metrics.jsonl"
 
+    def _handle_embedding_events(events: list[dict[str, object]]) -> None:
+        nonlocal embedding_metrics_handle
+        if not events:
+            return
         if logger is not None:
-            logger.log_scalar("train/loss", epoch_loss, step=epoch)
+            for event in events:
+                context_metrics = event.get("context")
+                target_metrics = event.get("target")
+                step = int(event.get("step", 0))
+                if context_metrics:
+                    logger.log_scalars("diagnostics/context", context_metrics, step=step)
+                if target_metrics:
+                    logger.log_scalars("diagnostics/target", target_metrics, step=step)
+                if "vq_usage_ratio" in event:
+                    logger.log_scalars(
+                        "diagnostics/vq",
+                        {
+                            "usage_ratio": float(event["vq_usage_ratio"]),
+                            "active_codes": float(event.get("vq_active_codes", 0)),
+                        },
+                        step=step,
+                    )
+        if embedding_metrics_handle is None:
+            embedding_metrics_handle = embedding_metrics_path.open("a", encoding="utf-8")
+        for event in events:
+            embedding_metrics_handle.write(json.dumps(event) + "\n")
+        embedding_metrics_handle.flush()
 
-        checkpoint_path = checkpoint_dir / f"checkpoint_epoch_{epoch:04d}.pt"
-        torch.save(
-            {
-                "epoch": epoch,
-                "config": config,
-                "model_state": experiment.trainer.encoder.state_dict(),
-                "projection_state": experiment.projection_head.state_dict(),
-                "optimizer_state": experiment.optimizer.state_dict(),
-                "queue_state": experiment.queue.state_dict(),
-                "device": device,
-            },
-            checkpoint_path,
-        )
+    try:
+        for epoch in range(1, epochs + 1):
+            epoch_loss = experiment.train_epoch(data_loader)
+            losses.append(epoch_loss)
+            print(f"Epoch {epoch}/{epochs}: loss={epoch_loss:.6f}")
 
-    if logger is not None:
-        logger.close()
+            if logger is not None:
+                logger.log_scalar("train/loss", epoch_loss, step=epoch)
+
+            events = experiment.consume_embedding_metrics()
+            _handle_embedding_events(events)
+
+            checkpoint_path = checkpoint_dir / f"checkpoint_epoch_{epoch:04d}.pt"
+            torch.save(
+                {
+                    "epoch": epoch,
+                    "config": config,
+                    "model_state": experiment.trainer.encoder.state_dict(),
+                    "projection_state": experiment.projection_head.state_dict(),
+                    "optimizer_state": experiment.optimizer.state_dict(),
+                    "queue_state": experiment.queue.state_dict(),
+                    "device": device,
+                },
+                checkpoint_path,
+            )
+
+        final_events = experiment.consume_embedding_metrics(flush=True)
+        _handle_embedding_events(final_events)
+    finally:
+        if embedding_metrics_handle is not None:
+            embedding_metrics_handle.close()
+        if logger is not None:
+            logger.close()
 
     metrics = {
         "config": str(args.config),

@@ -149,3 +149,22 @@ def test_amp_flag_falls_back_on_cpu():
     context, target = build_sample_batch(experiment.context_length)
     result = experiment.train_step(context, target)
     assert isinstance(result.loss, float)
+
+
+def test_embedding_metrics_emitted_when_interval_met():
+    config = config_with_optimizer()
+    config["diagnostics"] = {
+        "embedding_metrics": {
+            "interval": 1,
+            "max_samples": 32,
+        }
+    }
+    experiment = ObjectCentricJEPAExperiment(config)
+
+    context, target = build_sample_batch(experiment.context_length)
+    experiment.train_step(context, target)
+    events = experiment.consume_embedding_metrics()
+    assert events, "expected embedding diagnostics events to be emitted"
+    event = events[0]
+    assert "context" in event and "target" in event
+    assert event["context"]["variance"] >= 0.0
