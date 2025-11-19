@@ -4,12 +4,13 @@
 **Reviewer:** Senior Engineering Team Lead
 **Scope:** Comparative analysis of arc-jepa-rl project against LeJEPA (arXiv 2511.08544) and rbalestr-lab/lejepa implementation
 
+
 ---
 
 ## Executive Summary
 
 This review evaluates how well the arc-jepa-rl project aligns with cutting-edge JEPA research, specifically:
-1. **LeJEPA Paper** (arXiv 2511.08544): "Provable and Scalable Self-Supervised Learning Without the Heuristics"
+1. **LeJEPA Paper** (arXiv 2511.08544): "Provable and Scalable Self-Supervised Learning Without the Heuristics": https://arxiv.org/html/2511.08544v2
 2. **LeJEPA Repository** (rbalestr-lab/lejepa): Reference implementation with SIGReg regularization
 
 ### Key Findings
