@@ -1,0 +1,30 @@
+env:
+  dataset_path: tests/data/program_triples_tiny.jsonl
+  jepa_config_path: configs/training/jepa_program_conditioned.yaml
+  program_checkpoint:
+  max_chain_length: 3
+  seed: 13
+  max_actions: 64
+  reward:
+    success_distance: 0.1
+    success_bonus: 1.0
+    step_penalty: 0.02
+    simplicity_weight: 0.01
+    distance_scale: 1.0
+
+policy:
+  program_embedding_dim: 64
+  program_hidden_dim: 64
+  program_layers: 1
+  hidden_dims: [256, 128]
+  dropout: 0.05
+  activation: relu
+
+trainer:
+  iterations: 60
+  episodes_per_iter: 32
+  gamma: 0.95
+  entropy_coeff: 0.01
+  value_coeff: 0.5
+  lr: 3.0e-4
+  max_grad_norm: 1.0
