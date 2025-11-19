@@ -1,0 +1,59 @@
+# Program-conditioned JEPA (tiny smoke-test configuration)
+seed: 11
+program_dataset: tests/data/program_triples_tiny.jsonl
+
+data:
+  program_dataset: tests/data/program_triples_tiny.jsonl
+  max_program_length: 4
+  val_split: 0.3
+  shuffle: true
+
+object_encoder:
+  hidden_dim: 32
+  num_embeddings: 64
+  commitment_cost: 0.25
+  ema_decay: 0.99
+  activation: "relu"
+
+tokenizer:
+  max_objects: 4
+  max_color_features: 4
+  normalize: true
+  respect_colors: true
+
+program_encoder:
+  program_embedding_dim: 64
+  hidden_dim: 64
+  num_layers: 2
+  dropout: 0.1
+  transition_hidden_dim: 64
+
+optimizer:
+  lr: 5.0e-4
+  weight_decay: 0.0
+
+training:
+  batch_size: 2
+  epochs: 3
+  checkpoint_dir: artifacts/program_jepa/tiny
+  device: cpu
+  num_workers: 0
+
+logging:
+  enabled: true
+  log_dir: artifacts/program_jepa/tiny/tensorboard
+  flush_secs: 5
+
+loss:
+  temperature_init: 0.1
+  temperature_bounds: [0.05, 0.5]
+  learnable_temperature: true
+  queue_size: 64
+  projection_dim: 32
+  projection_layers: 2
+  projection_activation: "relu"
+
+sigreg:
+  weight: 0.05
+  num_slices: 16
+  num_points: 9

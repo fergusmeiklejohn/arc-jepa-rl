@@ -209,6 +209,7 @@ All generators output (input grid, output grid, rule_trace).
 ### Phase 1 — Structural Pretraining
 - Train the object-centric JEPA encoder on synthetic data for 1–2 epochs (using `ObjectCentricJEPAExperiment`).
 - Validate on small held-out synthetic set; inspect VQ code usage and object-level reconstruction proxies.
+- Prepare (input, program, output) triples with `scripts/prepare_program_triples.py` and train the counterfactual predictor via `scripts/train_program_conditioned_jepa.py` (`ProgramTripleDataset`, `ProgramConditionedJEPA`, SIGReg + InfoNCE), targeting cosine similarity ≥0.85 on a held-out manifest slice.
 
 ### Phase 2 — Grounded Skill Learning
 - Initialize option policies via supervised imitation of known transformations.
@@ -284,8 +285,9 @@ All generators output (input grid, output grid, rule_trace).
 1. Implement a **synthetic ARC generator** with controllable rule grammar.  
 2. Pretrain the **object-centric JEPA backbone** (tokenizer + VQ encoder) on 50k+ synthetic pairs, validating codebook usage.  
 3. Design and implement the **typed DSL enumerator** with neural guidance + constraint pruning.  
-4. Train **option policies** with heuristic traces + RL fine-tuning, seeding the primitive registry with discovered VQ skills.  
-5. Build the **few-shot solver loop** combining JEPA embeddings, Meta-JEPA priors, and DSL search; evaluate on ARC dev tasks.  
-6. Run ablations (JEPA-only, HRL-only, DSL-only, hybrid) to quantify contributions against the critique concerns.  
-4. Build **meta-JEPA** for task-level embedding and reasoning.  
-5. Benchmark systematically on ARC-1, ARC-2, and human-designed surprise tasks.
+4. Generate program-triple manifests and train the **ProgramConditionedJEPA** module (`scripts/train_program_conditioned_jepa.py`) to predict counterfactual latents; benchmark the latent predictor vs. grid execution (`scripts/benchmark_program_conditioned.py`) to quantify ≥100× speedup for hypothesis pruning.  
+5. Train **option policies** with heuristic traces + RL fine-tuning, seeding the primitive registry with discovered VQ skills.  
+6. Build the **few-shot solver loop** combining JEPA embeddings, Meta-JEPA priors, and DSL search; evaluate on ARC dev tasks.  
+7. Run ablations (JEPA-only, HRL-only, DSL-only, hybrid) to quantify contributions against the critique concerns.  
+8. Build **meta-JEPA** for task-level embedding and reasoning.  
+9. Benchmark systematically on ARC-1, ARC-2, and human-designed surprise tasks.

@@ -33,6 +33,19 @@ from .dataset import (
     ManifestTokenizedPairDataset,
     build_dummy_dataset,
 )
+from .program_dataset import (
+    ProgramTripleBatch,
+    ProgramTripleDataset,
+    ProgramTripleRecord,
+    ProgramTripleSample,
+    collate_program_triples,
+)
+from .program_conditioned import (
+    ProgramConditionedJEPA,
+    ProgramConditionedModelConfig,
+    ProgramSequenceEncoder,
+    aggregate_object_encoding,
+)
 
 __all__ = [
     "AugmentationConfig",
@@ -50,6 +63,15 @@ __all__ = [
     "InMemoryGridPairDataset",
     "ManifestGridPairDataset",
     "ManifestTokenizedPairDataset",
+    "ProgramTripleDataset",
+    "ProgramTripleRecord",
+    "ProgramTripleSample",
+    "ProgramTripleBatch",
+    "collate_program_triples",
+    "ProgramConditionedJEPA",
+    "ProgramConditionedModelConfig",
+    "ProgramSequenceEncoder",
+    "aggregate_object_encoding",
     "build_object_centric_encoder_from_config",
     "build_object_encoder",
     "build_object_token_batch",

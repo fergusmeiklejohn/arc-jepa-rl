@@ -1,0 +1,2 @@
+{"id": "task-1", "input": [[0, 1], [0, 0]], "output": [[1, 0], [0, 0]], "program": [{"primitive": "mirror_y", "params": {}}]}
+{"id": "task-2", "input": [[0, 2], [0, 0]], "output": [[0, 0], [0, 2]], "program": [{"primitive": "rotate90", "params": {"k": 3}}, {"primitive": "translate", "params": {"dx": 0, "dy": 1, "fill": 0}}], "metadata": {"phase": "I"}}
