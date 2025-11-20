@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
+import warnings
 from pathlib import Path
 import sys
 from typing import Dict
@@ -30,15 +32,23 @@ from training.utils import (
     EarlyStoppingConfig,
     GradientClippingConfig,
     LRSchedulerConfig,
+    MixedPrecisionConfig,
     build_lr_scheduler,
 )
 
 try:  # pragma: no cover - optional dependency at runtime
     import torch
     from torch.utils.data import DataLoader
+    try:  # pragma: no cover - cuda optional
+        from torch.cuda.amp import GradScaler, autocast as cuda_autocast
+    except Exception:  # pragma: no cover
+        GradScaler = None  # type: ignore
+        cuda_autocast = None  # type: ignore
 except Exception:  # pragma: no cover
     torch = None  # type: ignore
     DataLoader = object  # type: ignore
+    GradScaler = None  # type: ignore
+    cuda_autocast = None  # type: ignore
 
 
 def parse_args() -> argparse.Namespace:
@@ -177,6 +187,30 @@ def main() -> None:
     except Exception:
         total_steps = None
     scheduler = build_lr_scheduler(optimizer, lr_scheduler_cfg, total_steps=total_steps)
+    mp_cfg = MixedPrecisionConfig.from_mapping(train_cfg.get("mixed_precision"))
+    mp_enabled = False
+    mp_dtype = None
+    mp_context = nullcontext
+    scaler = None
+    if mp_cfg.enabled:
+        mp_dtype = mp_cfg.torch_dtype
+        if mp_dtype is None:
+            warnings.warn("Requested mixed precision dtype unsupported; using FP32.", RuntimeWarning, stacklevel=2)
+        elif device.type != "cuda" or not torch.cuda.is_available() or cuda_autocast is None:
+            warnings.warn("Mixed precision requested but CUDA autocast unavailable; using FP32.", RuntimeWarning, stacklevel=2)
+        elif mp_cfg.mode == "bf16" and not mp_cfg.supported_on_device(device.type):
+            warnings.warn("BF16 requested but device does not report support; using FP32.", RuntimeWarning, stacklevel=2)
+        else:
+            mp_enabled = True
+            def mp_context():  # type: ignore[no-redef]
+                return cuda_autocast(dtype=mp_dtype)  # type: ignore[arg-type]
+            if mp_cfg.use_grad_scaler:
+                if GradScaler is None:
+                    warnings.warn("GradScaler unavailable; disabling FP16 mixed precision.", RuntimeWarning, stacklevel=2)
+                    mp_enabled = False
+                    mp_context = nullcontext  # type: ignore[assignment]
+                else:
+                    scaler = GradScaler()
     early_cfg = EarlyStoppingConfig.from_mapping(train_cfg.get("early_stopping"))
     early_stopper = EarlyStopping(early_cfg)
     if early_cfg.enabled and val_loader is None:
@@ -192,8 +226,9 @@ def main() -> None:
             for vectors, labels, _ in loader:
                 vectors = vectors.to(device)
                 labels = labels.to(device)
-                preds = scorer(vectors)
-                loss = torch.nn.functional.mse_loss(preds, labels)
+                with mp_context():
+                    preds = scorer(vectors)
+                    loss = torch.nn.functional.mse_loss(preds, labels)
                 total_loss += float(loss.item())
                 batches += 1
         if state:
@@ -207,17 +242,30 @@ def main() -> None:
         for vectors, labels, _ in dataloader:
             vectors = vectors.to(device)
             labels = labels.to(device)
-            preds = scorer(vectors)
-            loss = torch.nn.functional.mse_loss(preds, labels)
             optimizer.zero_grad()
-            loss.backward()
-            if grad_clip_cfg.enabled:
-                torch.nn.utils.clip_grad_norm_(
-                    scorer.parameters(),
-                    max_norm=grad_clip_cfg.max_norm,
-                    norm_type=grad_clip_cfg.norm_type,
-                )
-            optimizer.step()
+            with mp_context():
+                preds = scorer(vectors)
+                loss = torch.nn.functional.mse_loss(preds, labels)
+            if scaler is not None:
+                scaler.scale(loss).backward()
+                if grad_clip_cfg.enabled:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(
+                        scorer.parameters(),
+                        max_norm=grad_clip_cfg.max_norm,
+                        norm_type=grad_clip_cfg.norm_type,
+                    )
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                if grad_clip_cfg.enabled:
+                    torch.nn.utils.clip_grad_norm_(
+                        scorer.parameters(),
+                        max_norm=grad_clip_cfg.max_norm,
+                        norm_type=grad_clip_cfg.norm_type,
+                    )
+                optimizer.step()
             if scheduler is not None:
                 scheduler.step()
             epoch_loss += loss.item()

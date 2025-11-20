@@ -74,6 +74,72 @@ class LRSchedulerConfig:
         return self.name not in {"", "none", None}
 
 
+@dataclass(frozen=True)
+class MixedPrecisionConfig:
+    """Simple mixed-precision selector."""
+
+    mode: str = "none"  # one of: none, fp16, bf16
+
+    @classmethod
+    def from_mapping(
+        cls,
+        data: Mapping[str, object] | str | None,
+        *,
+        legacy_amp: bool | None = None,
+    ) -> "MixedPrecisionConfig":
+        if isinstance(data, Mapping):
+            raw_mode = data.get("mode", cls.mode)
+        else:
+            raw_mode = data if data is not None else cls.mode
+        if isinstance(raw_mode, bool):
+            mode = "fp16" if raw_mode else "none"
+        else:
+            mode = str(raw_mode).lower().strip()
+        aliases = {
+            "float16": "fp16",
+            "half": "fp16",
+            "amp": "fp16",
+            "bfloat16": "bf16",
+        }
+        mode = aliases.get(mode, mode)
+        if legacy_amp and mode == cls.mode:
+            mode = "fp16"
+        if mode not in {"none", "fp16", "bf16"}:
+            raise ValueError("mixed_precision mode must be one of: none, fp16, bf16")
+        return cls(mode=mode)
+
+    @property
+    def enabled(self) -> bool:
+        return self.mode != "none"
+
+    @property
+    def torch_dtype(self):
+        if torch is None:  # pragma: no cover - torch optional
+            return None
+        if self.mode == "fp16":
+            return torch.float16
+        if self.mode == "bf16":
+            return torch.bfloat16
+        return None
+
+    @property
+    def use_grad_scaler(self) -> bool:
+        return self.mode == "fp16"
+
+    def supported_on_device(self, device_type: str) -> bool:
+        if torch is None:  # pragma: no cover - torch optional
+            return False
+        if device_type != "cuda":
+            return False
+        if not torch.cuda.is_available():
+            return False
+        if self.mode == "bf16":
+            checker = getattr(torch.cuda, "is_bf16_supported", None)
+            if checker is not None:
+                return bool(checker())
+        return True
+
+
 def _resolve_total_steps(config: LRSchedulerConfig, total_steps: int | None) -> int:
     steps = total_steps or config.total_steps
     if steps is None:

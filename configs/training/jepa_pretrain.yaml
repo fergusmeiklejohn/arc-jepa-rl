@@ -40,7 +40,7 @@ training:
   epochs: 10
   checkpoint_dir: artifacts/jepa/pretrain
   device: cpu
-  amp: false
+  mixed_precision: "none"
   grad_accum_steps: 1
   grad_clip:
     max_norm: 1.0

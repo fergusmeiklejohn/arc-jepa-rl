@@ -39,6 +39,13 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Torch device to run training on (overrides training.device in config)",
     )
+    parser.add_argument(
+        "--mixed-precision",
+        type=str,
+        choices=("none", "fp16", "bf16"),
+        default=None,
+        help="Override mixed precision mode (default: use config)",
+    )
     return parser.parse_args()
 
 
@@ -50,6 +57,8 @@ def main() -> None:
     if not isinstance(training_cfg, dict):
         raise ValueError("config['training'] must be a mapping")
 
+    if args.mixed_precision is not None:
+        training_cfg["mixed_precision"] = args.mixed_precision
     device = args.device or training_cfg.get("device") or "cpu"
     experiment = ObjectCentricJEPAExperiment(config, device=device)
 

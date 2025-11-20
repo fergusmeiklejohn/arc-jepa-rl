@@ -2,18 +2,27 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Iterable, List, Mapping, Sequence, Tuple
+import warnings
 
 try:  # pragma: no cover - torch optional
     import torch
     from torch.utils.data import DataLoader
     import torch.utils.data
     import torch.nn.functional as F
+    try:  # pragma: no cover - CUDA optional
+        from torch.cuda.amp import GradScaler, autocast as cuda_autocast
+    except Exception:  # pragma: no cover
+        GradScaler = None  # type: ignore
+        cuda_autocast = None  # type: ignore
 except Exception:  # pragma: no cover
     torch = None  # type: ignore
     DataLoader = object  # type: ignore
     F = None  # type: ignore
+    GradScaler = None  # type: ignore
+    cuda_autocast = None  # type: ignore
 
 from arcgen import SyntheticTask
 
@@ -29,6 +38,7 @@ from training.utils import (
     EarlyStoppingConfig,
     GradientClippingConfig,
     LRSchedulerConfig,
+    MixedPrecisionConfig,
     build_lr_scheduler,
 )
 
@@ -55,6 +65,7 @@ class TrainingConfig:
     early_stopping: EarlyStoppingConfig = EarlyStoppingConfig()
     grad_clip: GradientClippingConfig = field(default_factory=GradientClippingConfig)
     lr_scheduler: LRSchedulerConfig = field(default_factory=LRSchedulerConfig)
+    mixed_precision: MixedPrecisionConfig = field(default_factory=MixedPrecisionConfig)
 
 
 @dataclass
@@ -117,6 +128,47 @@ class MetaJEPATrainer:
         _ensure_torch()
         device = torch.device(config.device)
         model = self.model.to(device)
+
+        mp_cfg = config.mixed_precision
+        mp_enabled = False
+        mp_dtype = None
+        mp_context = nullcontext
+        scaler = None
+        if mp_cfg.enabled:
+            mp_dtype = mp_cfg.torch_dtype
+            if mp_dtype is None:
+                warnings.warn(
+                    "Requested mixed_precision dtype unsupported; running in FP32.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+            elif device.type != "cuda" or not torch.cuda.is_available() or cuda_autocast is None:
+                warnings.warn(
+                    "Mixed precision requested but CUDA autocast unavailable; running in FP32.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+            elif mp_cfg.mode == "bf16" and not mp_cfg.supported_on_device(device.type):
+                warnings.warn(
+                    "BF16 requested but device does not report support; running in FP32.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+            else:
+                mp_enabled = True
+                def mp_context():  # type: ignore[no-redef]
+                    return cuda_autocast(dtype=mp_dtype)  # type: ignore[arg-type]
+                if mp_cfg.use_grad_scaler:
+                    if GradScaler is None:
+                        warnings.warn(
+                            "GradScaler unavailable; FP16 mixed precision disabled.",
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
+                        mp_enabled = False
+                        mp_context = nullcontext  # type: ignore[assignment]
+                    else:
+                        scaler = GradScaler()
 
         min_temp, max_temp = config.temperature_bounds
         if min_temp <= 0 or max_temp <= 0:
@@ -209,25 +261,38 @@ class MetaJEPATrainer:
                 labels = labels.to(device)
                 adjacency = adjacency.to(device)
                 optimizer.zero_grad()
-                embeddings, relational_logits = model(
-                    features,
-                    adjacency=adjacency,
-                    return_relations=use_relational,
-                )
-                temperature = current_temperature()
-                loss = contrastive_loss(embeddings, labels, temperature=temperature)
-                if use_relational and relational_logits is not None:
-                    relational_loss = F.binary_cross_entropy_with_logits(relational_logits, adjacency)
-                    loss = loss + config.relational_weight * relational_loss
+                with mp_context():
+                    embeddings, relational_logits = model(
+                        features,
+                        adjacency=adjacency,
+                        return_relations=use_relational,
+                    )
+                    temperature = current_temperature()
+                    loss = contrastive_loss(embeddings, labels, temperature=temperature)
+                    if use_relational and relational_logits is not None:
+                        relational_loss = F.binary_cross_entropy_with_logits(relational_logits, adjacency)
+                        loss = loss + config.relational_weight * relational_loss
                 if loss.requires_grad:
-                    loss.backward()
-                    if grad_clip_cfg.enabled:
-                        torch.nn.utils.clip_grad_norm_(
-                            model.parameters(),
-                            max_norm=grad_clip_cfg.max_norm,
-                            norm_type=grad_clip_cfg.norm_type,
-                        )
-                    optimizer.step()
+                    if scaler is not None:
+                        scaler.scale(loss).backward()
+                        if grad_clip_cfg.enabled:
+                            scaler.unscale_(optimizer)
+                            torch.nn.utils.clip_grad_norm_(
+                                model.parameters(),
+                                max_norm=grad_clip_cfg.max_norm,
+                                norm_type=grad_clip_cfg.norm_type,
+                            )
+                        scaler.step(optimizer)
+                        scaler.update()
+                    else:
+                        loss.backward()
+                        if grad_clip_cfg.enabled:
+                            torch.nn.utils.clip_grad_norm_(
+                                model.parameters(),
+                                max_norm=grad_clip_cfg.max_norm,
+                                norm_type=grad_clip_cfg.norm_type,
+                            )
+                        optimizer.step()
                     if scheduler is not None:
                         scheduler.step()
                     epoch_loss += float(loss.item())
@@ -241,6 +306,7 @@ class MetaJEPATrainer:
                     current_temperature,
                     use_relational=use_relational,
                     relational_weight=config.relational_weight,
+                    mp_context=mp_context,
                 )
                 val_history.append(val_loss)
                 if early_stopper.update(val_loss, step=epoch):
@@ -264,6 +330,7 @@ class MetaJEPATrainer:
         *,
         use_relational: bool,
         relational_weight: float,
+        mp_context,
     ) -> float:
         state = model.training
         model.eval()
@@ -275,15 +342,16 @@ class MetaJEPATrainer:
                 features = features.to(device)
                 labels = labels.to(device)
                 adjacency = adjacency.to(device)
-                embeddings, relational_logits = model(
-                    features,
-                    adjacency=adjacency,
-                    return_relations=use_relational,
-                )
-                loss = contrastive_loss(embeddings, labels, temperature=temperature)
-                if use_relational and relational_logits is not None:
-                    relational_loss = F.binary_cross_entropy_with_logits(relational_logits, adjacency)
-                    loss = loss + relational_weight * relational_loss
+                with mp_context():
+                    embeddings, relational_logits = model(
+                        features,
+                        adjacency=adjacency,
+                        return_relations=use_relational,
+                    )
+                    loss = contrastive_loss(embeddings, labels, temperature=temperature)
+                    if use_relational and relational_logits is not None:
+                        relational_loss = F.binary_cross_entropy_with_logits(relational_logits, adjacency)
+                        loss = loss + relational_weight * relational_loss
                 total_loss += float(loss.item())
                 batches += 1
         if state:

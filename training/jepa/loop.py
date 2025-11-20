@@ -25,7 +25,12 @@ from .object_pipeline import ObjectCentricEncoding, ObjectCentricJEPAEncoder, Ob
 from .sigreg import SIGRegLoss, SIGRegLossConfig
 
 from training.modules.projection import InfoNCEQueue, ProjectionHead
-from training.utils.optimization import GradientClippingConfig, LRSchedulerConfig, build_lr_scheduler
+from training.utils.optimization import (
+    GradientClippingConfig,
+    LRSchedulerConfig,
+    MixedPrecisionConfig,
+    build_lr_scheduler,
+)
 
 try:  # pragma: no cover - optional
     import torch
@@ -129,20 +134,23 @@ class ObjectCentricJEPAExperiment:
         training_cfg = config.get("training", {})
         if isinstance(training_cfg, Mapping):
             self.grad_accum_steps = max(1, int(training_cfg.get("grad_accum_steps", 1)))
-            self._amp_requested = bool(training_cfg.get("amp", False))
+            self.mixed_precision_config = MixedPrecisionConfig.from_mapping(
+                training_cfg.get("mixed_precision"),
+                legacy_amp=bool(training_cfg.get("amp", False)),
+            )
             self._planned_epochs = int(training_cfg.get("epochs", 1))
             self.grad_clip_config = GradientClippingConfig.from_mapping(training_cfg.get("grad_clip"))
             self.lr_scheduler_config = LRSchedulerConfig.from_mapping(training_cfg.get("lr_scheduler"))
         else:
             self.grad_accum_steps = 1
-            self._amp_requested = False
+            self.mixed_precision_config = MixedPrecisionConfig.from_mapping(None)
             self._planned_epochs = 1
             self.grad_clip_config = GradientClippingConfig.from_mapping(None)
             self.lr_scheduler_config = LRSchedulerConfig.from_mapping(None)
 
         self._amp_enabled = False
         self._grad_scaler: GradScaler | None = None
-        self._amp_dtype = torch.float16
+        self._amp_dtype = None
         self._init_amp_state()
 
         self.trainer = ObjectCentricJEPATrainer(config)
@@ -613,27 +621,56 @@ class ObjectCentricJEPAExperiment:
     def _init_amp_state(self) -> None:
         if torch is None:
             return
-        if not self._amp_requested:
+        mp = self.mixed_precision_config
+        if not mp.enabled:
             return
         if self.device.type != "cuda" or not torch.cuda.is_available():
             warnings.warn(
-                "AMP requested but CUDA device unavailable; falling back to FP32.",
+                "Mixed precision requested but CUDA device unavailable; falling back to FP32.",
                 RuntimeWarning,
                 stacklevel=2,
             )
             return
-        if GradScaler is None or cuda_autocast is None:
+        if cuda_autocast is None:
             warnings.warn(
-                "torch.cuda.amp not available; disabling AMP despite training.amp=true",
+                "torch.cuda.amp not available; disabling mixed precision",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return
+        dtype = mp.torch_dtype
+        if dtype is None:
+            warnings.warn(
+                "Requested mixed_precision dtype unsupported; falling back to FP32.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return
+        if mp.mode == "bf16" and not mp.supported_on_device(self.device.type):
+            warnings.warn(
+                "BF16 requested but device does not report support; falling back to FP32.",
                 RuntimeWarning,
                 stacklevel=2,
             )
             return
         self._amp_enabled = True
-        self._grad_scaler = GradScaler()
+        self._amp_dtype = dtype
+        if mp.use_grad_scaler:
+            if GradScaler is None:
+                warnings.warn(
+                    "GradScaler unavailable; disabling FP16 mixed precision",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                self._amp_enabled = False
+                self._amp_dtype = None
+                return
+            self._grad_scaler = GradScaler()
+        else:
+            self._grad_scaler = None
 
     def _autocast_context(self):
-        if not self._amp_enabled or cuda_autocast is None:
+        if not self._amp_enabled or cuda_autocast is None or self._amp_dtype is None:
             return nullcontext()
         return cuda_autocast(dtype=self._amp_dtype)
 

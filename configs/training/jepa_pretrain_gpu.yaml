@@ -44,7 +44,7 @@ training:
   checkpoint_dir: artifacts/jepa/pretrain_gpu
   device: cuda
   drop_last: true
-  amp: true
+  mixed_precision: "fp16"
   pin_memory: true
   grad_clip:
     max_norm: 1.0

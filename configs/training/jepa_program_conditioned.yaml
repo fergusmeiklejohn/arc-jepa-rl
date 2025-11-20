@@ -38,6 +38,7 @@ training:
   checkpoint_dir: artifacts/program_jepa/tiny
   device: cpu
   num_workers: 0
+  mixed_precision: "none"
   grad_clip:
     max_norm: 1.0
     norm_type: 2.0

@@ -24,6 +24,7 @@ train:
   batch_size: 32
   lr: 0.001
   weight_decay: 0.0
+  mixed_precision: "none"
   grad_clip:
     max_norm: 1.0
   lr_scheduler:

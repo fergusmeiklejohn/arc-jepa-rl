@@ -12,7 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from training.eval import load_synthetic_tasks_jsonl
 from training.meta_jepa import MetaJEPATrainer, TrainingConfig, build_rule_family_examples
-from training.utils import EarlyStoppingConfig, GradientClippingConfig, LRSchedulerConfig
+from training.utils import EarlyStoppingConfig, GradientClippingConfig, LRSchedulerConfig, MixedPrecisionConfig
 
 try:  # pragma: no cover - optional dependency
     import torch
@@ -113,6 +113,13 @@ def parse_args() -> argparse.Namespace:
         default=0.1,
         help="Minimum LR scale for scheduler decay (0-1)",
     )
+    parser.add_argument(
+        "--mixed-precision",
+        type=str,
+        choices=["none", "fp16", "bf16"],
+        default="none",
+        help="Mixed-precision mode (default: none)",
+    )
     parser.add_argument("--output", type=Path, default=None, help="Optional path to write trained weights (.pt)")
     return parser.parse_args()
 
@@ -163,6 +170,7 @@ def main() -> None:
             warmup_steps=max(0, args.lr_warmup_steps),
             min_lr_scale=max(0.0, min(1.0, args.lr_min_scale)),
         ),
+        mixed_precision=MixedPrecisionConfig(mode=args.mixed_precision),
     )
     result = trainer.fit(config)
 
