@@ -71,10 +71,12 @@ class OptimizerConfig:
 
 @dataclass(frozen=True)
 class InfoNCELossConfig:
-    temperature_init: float = 0.07
-    temperature_bounds: Sequence[float] = (0.03, 0.3)
+    temperature: float = 0.1
+    temperature_init: float = 0.1
+    temperature_min: float = 0.05
+    temperature_max: float = 0.5
     learnable_temperature: bool = True
-    queue_size: int = 4096
+    queue_size: int = 2048
     projection_dim: int = 256
     projection_layers: int = 2
     projection_activation: str = "relu"
@@ -85,12 +87,29 @@ class InfoNCELossConfig:
     def from_mapping(cls, data: Mapping[str, object] | None) -> "InfoNCELossConfig":
         if data is None:
             return cls()
-        bounds = data.get("temperature_bounds", cls.temperature_bounds)
-        if not isinstance(bounds, Sequence) or len(bounds) != 2:
-            raise ValueError("temperature_bounds must be a sequence of length 2")
+        bounds = data.get("temperature_bounds")
+        temp_min = data.get("temperature_min", cls.temperature_min)
+        temp_max = data.get("temperature_max", cls.temperature_max)
+        if bounds is not None:
+            if not isinstance(bounds, Sequence) or len(bounds) != 2:
+                raise ValueError("temperature_bounds must be a sequence of length 2")
+            temp_min, temp_max = bounds
+        temperature_min = float(temp_min)
+        temperature_max = float(temp_max)
+        if temperature_min <= 0 or temperature_max <= 0:
+            raise ValueError("temperature_min/temperature_max must be positive")
+        if temperature_min >= temperature_max:
+            raise ValueError("temperature_min must be < temperature_max")
+        temperature_value = float(
+            data.get("temperature", data.get("temperature_init", cls.temperature)),
+        )
+        if temperature_value <= 0:
+            raise ValueError("temperature must be positive")
         return cls(
-            temperature_init=float(data.get("temperature_init", cls.temperature_init)),
-            temperature_bounds=bounds,
+            temperature=temperature_value,
+            temperature_init=float(data.get("temperature_init", temperature_value)),
+            temperature_min=temperature_min,
+            temperature_max=temperature_max,
             learnable_temperature=bool(data.get("learnable_temperature", cls.learnable_temperature)),
             queue_size=int(data.get("queue_size", cls.queue_size)),
             projection_dim=int(data.get("projection_dim", cls.projection_dim)),
@@ -99,6 +118,10 @@ class InfoNCELossConfig:
             use_target_encoder=bool(data.get("use_target_encoder", cls.use_target_encoder)),
             target_ema_decay=float(data.get("target_ema_decay", cls.target_ema_decay)),
         )
+
+    @property
+    def temperature_bounds(self) -> tuple[float, float]:
+        return (self.temperature_min, self.temperature_max)
 
 
 @dataclass(frozen=True)
@@ -189,12 +212,12 @@ class ObjectCentricJEPAExperiment:
         ).to(self.device)
 
         self._temperature_bounds = (
-            float(self.loss_config.temperature_bounds[0]),
-            float(self.loss_config.temperature_bounds[1]),
+            float(self.loss_config.temperature_min),
+            float(self.loss_config.temperature_max),
         )
 
         temperature_value = torch.tensor(
-            self.loss_config.temperature_init,
+            self.loss_config.temperature_init if self.loss_config.learnable_temperature else self.loss_config.temperature,
             dtype=torch.float32,
             device=self.device,
         )

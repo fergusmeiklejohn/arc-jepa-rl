@@ -63,10 +63,11 @@ augmentations:
 
 loss:
   objective: "infonce"
-  temperature_init: 0.07
-  temperature_bounds: [0.03, 0.3]
+  temperature: 0.07
+  temperature_min: 0.05
+  temperature_max: 0.2
   learnable_temperature: true
-  queue_size: 8192
+  queue_size: 4096
   projection_dim: 256
   projection_layers: 2
   projection_activation: "relu"

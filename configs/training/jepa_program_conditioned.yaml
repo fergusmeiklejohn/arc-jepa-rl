@@ -53,8 +53,9 @@ logging:
   flush_secs: 5
 
 loss:
-  temperature_init: 0.1
-  temperature_bounds: [0.05, 0.5]
+  temperature: 0.1
+  temperature_min: 0.05
+  temperature_max: 0.5
   learnable_temperature: true
   queue_size: 64
   projection_dim: 32
