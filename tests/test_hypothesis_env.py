@@ -68,3 +68,24 @@ def test_active_reasoner_policy_shapes():
     logits, values = policy(obs)
     assert logits.shape[-1] == env.action_space.n
     assert values.shape[0] == 1
+
+
+def test_sigreg_monitor_reports_penalty():
+    env = HypothesisSearchEnv(
+        {
+            "dataset_path": "tests/data/program_triples_tiny.jsonl",
+            "jepa_config_path": "configs/training/jepa_program_conditioned.yaml",
+            "max_chain_length": 2,
+            "reward": {"success_distance": 2.0},
+            "max_actions": 8,
+            "sigreg_monitor": {"enabled": True, "num_slices": 8, "num_points": 7},
+        }
+    )
+    _ = _maybe_unwrap_obs(env.reset())
+    result = env.step(0)
+    if len(result) == 5:
+        _, _, _, _, info = result
+    else:
+        _, _, _, info = result
+    assert "sigreg_penalty" in info
+    assert info["sigreg_penalty"] is None or isinstance(info["sigreg_penalty"], float)

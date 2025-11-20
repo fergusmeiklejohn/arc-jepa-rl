@@ -41,6 +41,7 @@ from training.jepa import (
     load_jepa_config,
 )
 from training.jepa.object_pipeline import build_object_token_batch
+from training.jepa.sigreg import SIGRegLoss, SIGRegLossConfig
 
 
 class GymUnavailableError(RuntimeError):
@@ -248,6 +249,22 @@ class HypothesisSearchEnv(gym.Env if GYM_AVAILABLE else object):  # type: ignore
         )
         self._program_mask = torch.zeros((self.max_steps,), dtype=torch.float32, device=self.device)
         self._step_count = 0
+        monitor_cfg = cfg.get("sigreg_monitor")
+        self._sigreg_loss = None
+        self._sigreg_sum = 0.0
+        self._sigreg_count = 0
+        if isinstance(monitor_cfg, Mapping) and monitor_cfg.get("enabled", False):
+            sigreg_cfg = SIGRegLossConfig.from_mapping(
+                {
+                    "enabled": True,
+                    "num_slices": monitor_cfg.get("num_slices", 64),
+                    "num_points": monitor_cfg.get("num_points", 17),
+                }
+            )
+            self._sigreg_loss = SIGRegLoss(
+                num_slices=sigreg_cfg.num_slices,
+                num_points=sigreg_cfg.num_points,
+            ).to(self.device)
 
     # ---------------------------------------------------------------- sampling
     def _build_phase_index(
@@ -329,6 +346,8 @@ class HypothesisSearchEnv(gym.Env if GYM_AVAILABLE else object):  # type: ignore
         self._program_mask.zero_()
         self._program_params.zero_()
         self._step_count = 0
+        self._sigreg_sum = 0.0
+        self._sigreg_count = 0
 
         self._start_latent = _latent_from_grid(self._trainer, record.input_grid, device=self.device)
         self._target_latent = _latent_from_grid(self._trainer, record.output_grid, device=self.device)
@@ -375,6 +394,13 @@ class HypothesisSearchEnv(gym.Env if GYM_AVAILABLE else object):  # type: ignore
             self._current_distance = self._distance(self._current_latent, self._target_latent)
             progress = prev_distance - self._current_distance
 
+            if self._sigreg_loss is not None:
+                with torch.no_grad():
+                    batch = torch.stack([self._current_latent, self._target_latent], dim=0)
+                    penalty = float(self._sigreg_loss(batch).detach().cpu())
+                self._sigreg_sum += penalty
+                self._sigreg_count += 1
+
             reward = float(progress * self.reward_cfg.distance_scale)
             reward -= self.reward_cfg.step_penalty
             reward -= self.reward_cfg.simplicity_weight * (self._step_count - 1)
@@ -390,6 +416,7 @@ class HypothesisSearchEnv(gym.Env if GYM_AVAILABLE else object):  # type: ignore
                     "progress": float(progress),
                     "success": success,
                     "chain_length": self._step_count,
+                    "sigreg_penalty": self._sigreg_sum / max(1, self._sigreg_count) if self._sigreg_loss is not None else None,
                 }
             )
 

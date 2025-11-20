@@ -133,6 +133,7 @@ def train_active_reasoner(
             rewards = []
             lengths = []
             successes = 0
+            sigreg_sums = []
 
             for _ in range(episodes_per_iter):
                 transitions, info = rollout_episode(env, policy, gamma=gamma, device=device)
@@ -140,6 +141,8 @@ def train_active_reasoner(
                 rewards.append(info["reward"])
                 lengths.append(info["length"])
                 successes += 1 if info["success"] else 0
+                if info.get("sigreg_penalty") is not None:
+                    sigreg_sums.append(float(info["sigreg_penalty"]))
 
             batch_obs = stack_observations(transition["obs"] for transition in batch_transitions)
             actions = torch.cat([t["action"] for t in batch_transitions], dim=0)
@@ -168,6 +171,8 @@ def train_active_reasoner(
                 "value_loss": float(value_loss.detach().cpu()),
                 "entropy": float(entropy.detach().cpu()),
             }
+            if sigreg_sums:
+                summary["sigreg_penalty_mean"] = float(sum(sigreg_sums) / len(sigreg_sums))
             metrics_file.write(json.dumps(summary) + "\n")
             metrics_file.flush()
             print(

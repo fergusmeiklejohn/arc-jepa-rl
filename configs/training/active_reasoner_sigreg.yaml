@@ -1,0 +1,35 @@
+# Active Reasoner training config with SIGReg-aware monitoring
+
+env:
+  dataset_path: tests/data/program_triples_tiny.jsonl
+  jepa_config_path: configs/training/jepa_program_conditioned.yaml
+  max_chain_length: 3
+  max_actions: 16
+  reward:
+    success_distance: 1.0
+    success_bonus: 1.0
+    step_penalty: 0.02
+    invalid_penalty: 0.1
+    distance_scale: 1.0
+    simplicity_weight: 0.01
+  sigreg_monitor:
+    enabled: true
+    num_slices: 32
+    num_points: 17
+
+policy:
+  program_embedding_dim: 64
+  program_hidden_dim: 64
+  program_layers: 1
+  hidden_dims: [256, 128]
+  dropout: 0.1
+  activation: relu
+
+trainer:
+  gamma: 0.95
+  lr: 3.0e-4
+  entropy_coeff: 0.01
+  value_coeff: 0.5
+  max_grad_norm: 1.0
+  episodes_per_iter: 8
+  iterations: 5
