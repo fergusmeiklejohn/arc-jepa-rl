@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, Iterator, List, Mapping, Sequence, Tuple
 
 from .primitives import Primitive, PrimitiveRegistry
-from .types import DSLType
+from .types import DSLType, is_value_of_type
 
 
 @dataclass(frozen=True)
@@ -179,7 +179,13 @@ class ProgramInterpreter:
         if expr.var is not None:
             if expr.var.name not in inputs:
                 raise KeyError(f"missing input value for '{expr.var.name}'")
-            return inputs[expr.var.name]
+            value = inputs[expr.var.name]
+            if not is_value_of_type(value, expr.type):
+                raise TypeError(f"input '{expr.var.name}' expected type {expr.type}, got {type(value)}")
+            return value
 
         args = [self._evaluate_expr(child, inputs) for child in expr.args]
+        for arg_value, expected_type in zip(args, expr.primitive.input_types):
+            if not is_value_of_type(arg_value, expected_type):
+                raise TypeError(f"{expr.primitive.name} expected {expected_type}, got {type(arg_value)}")
         return expr.primitive.implementation(*args)
