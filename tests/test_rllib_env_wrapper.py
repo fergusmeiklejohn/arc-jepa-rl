@@ -55,7 +55,18 @@ def _env_config() -> dict:
     }
 
 
-def test_rllib_env_reset_and_step_shapes():
+def test_rllib_env_reset_and_step_shapes(monkeypatch):
+    class DummyScorer:
+        def embed(self, grid):
+            return torch.zeros(4)
+        def distance(self, a, b, metric="cosine"):
+            return torch.zeros(1)
+
+    def _dummy_scorer(_cfg, device="cpu"):
+        return DummyScorer()
+
+    monkeypatch.setattr("training.rllib_utils.env.build_latent_scorer_from_config", _dummy_scorer)
+
     env = LatentOptionRLLibEnv(_env_config())
     reset_output = env.reset()
     if GYMNASIUM_API:
@@ -80,7 +91,15 @@ def test_rllib_env_reset_and_step_shapes():
     assert isinstance(reward, float)
 
 
-def test_hierarchical_env_termination_action():
+def test_hierarchical_env_termination_action(monkeypatch):
+    class DummyScorer:
+        def embed(self, grid):
+            return torch.zeros(4)
+        def distance(self, a, b, metric="cosine"):
+            return torch.zeros(1)
+
+    monkeypatch.setattr("training.rllib_utils.env.build_latent_scorer_from_config", lambda *_args, **_kwargs: DummyScorer())
+
     env = HierarchicalOptionRLLibEnv(_env_config())
     reset_output = env.reset()
     obs = reset_output[0] if GYMNASIUM_API else reset_output

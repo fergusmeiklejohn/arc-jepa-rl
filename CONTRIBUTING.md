@@ -12,6 +12,7 @@ well‑tested, and aligned with the Beads workflow described in `Agents.md`.
 ## Testing
 - Run the full suite before pushing: `PYTHONPATH=. .venv/bin/pytest`.
 - Targeted runs for quicker loops are fine, but avoid merging with red tests.
+- Mock heavy dependencies in tests where practical (e.g., replace trainers/scorers or Ray envs with lightweight stubs) to keep the suite fast and stable.
 
 ## Style & Etiquette
 - Follow existing code patterns; prefer type hints and small, focused functions.
