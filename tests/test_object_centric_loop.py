@@ -182,3 +182,17 @@ def test_sigreg_loss_metrics_emitted_when_enabled():
     assert events, "expected per-step loss metrics"
     assert events[-1]["sigreg"] >= 0.0
     assert events[-1]["info_nce"] > 0.0
+
+
+def test_queue_updates_each_microbatch_with_grad_accum():
+    config = config_with_optimizer()
+    config["training"] = {"grad_accum_steps": 2}
+    config["loss"] = {"queue_size": 8}
+    experiment = ObjectCentricJEPAExperiment(config)
+
+    # Three batches of size 2 with grad accumulation = 2 should enqueue 6 projections.
+    dataset = build_dummy_dataset(num_batches=3, context_length=experiment.context_length, batch_size=2)
+    experiment.train_epoch(dataset)
+
+    negatives = experiment.queue.get_negatives()
+    assert negatives.shape[0] == 6

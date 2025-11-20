@@ -338,13 +338,14 @@ class ObjectCentricJEPAExperiment:
 
         loss, context_repr, target_repr, target_proj = self._forward_from_grids(context_sequences, target_grids)
 
+        with torch.no_grad():
+            # Enqueue freshly encoded targets immediately so subsequent micro-batches
+            # see them as negatives even when using gradient accumulation.
+            self.queue.enqueue(self._prepare_queue_projection(target_proj))
         self.optimizer.zero_grad(set_to_none=True)
         self._step_optimizer(loss)
         if self._use_target_encoder:
             self._update_target_network()
-
-        with torch.no_grad():
-            self.queue.enqueue(self._prepare_queue_projection(target_proj))
 
         return TrainStepResult(
             loss=float(loss.detach().float().cpu().item()),
@@ -356,13 +357,13 @@ class ObjectCentricJEPAExperiment:
         token_batch = batch.to(self.device, non_blocking=self._use_non_blocking)
         loss, context_repr, target_repr, target_proj = self._forward_from_token_batch(token_batch)
 
+        with torch.no_grad():
+            # Make new negatives available immediately, even when delaying optimizer steps.
+            self.queue.enqueue(self._prepare_queue_projection(target_proj))
         self.optimizer.zero_grad(set_to_none=True)
         self._step_optimizer(loss)
         if self._use_target_encoder:
             self._update_target_network()
-
-        with torch.no_grad():
-            self.queue.enqueue(self._prepare_queue_projection(target_proj))
 
         return TrainStepResult(
             loss=float(loss.detach().float().cpu().item()),
@@ -518,7 +519,6 @@ class ObjectCentricJEPAExperiment:
         total_loss = 0.0
         batches = 0
         pending_losses: list[torch.Tensor] = []
-        pending_targets: list[torch.Tensor] = []
 
         self._ensure_scheduler(dataset)
 
@@ -530,18 +530,15 @@ class ObjectCentricJEPAExperiment:
             self._step_optimizer(combined)
             if self._use_target_encoder:
                 self._update_target_network()
-            with torch.no_grad():
-                for proj in pending_targets:
-                    self.queue.enqueue(proj)
             pending_losses.clear()
-            pending_targets.clear()
 
         for batch in dataset:
             loss_tensor, target_proj, _ = self._forward_batch_loss(batch)
 
             total_loss += float(loss_tensor.detach().float().cpu().item())
             pending_losses.append(loss_tensor)
-            pending_targets.append(self._prepare_queue_projection(target_proj))
+            with torch.no_grad():
+                self.queue.enqueue(self._prepare_queue_projection(target_proj))
             batches += 1
 
             if len(pending_losses) == self.grad_accum_steps:
