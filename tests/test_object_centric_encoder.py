@@ -78,3 +78,14 @@ def test_build_from_config_helpers():
     pair = encode_context_target(wrapper, [grid, grid], [grid, grid])
     assert isinstance(pair, EncodedPairBatch)
     assert pair.context.embeddings.shape[0] == 2
+
+
+def test_vq_can_be_disabled_via_flag():
+    cfg = {
+        "tokenizer": {"max_objects": 2, "max_color_features": 1},
+        "object_encoder": {"hidden_dim": 8, "vq_enabled": False},
+    }
+    wrapper = build_object_centric_encoder_from_config(cfg["tokenizer"], cfg["object_encoder"])
+    encoding = wrapper.encode([Grid([[0]])])
+    assert encoding.vq_loss is None
+    assert encoding.vq_indices is None

@@ -75,14 +75,19 @@ class ObjectEncoderConfig:
     relational_layers: int = 2
     relational_heads: int = 4
     relational_dropout: float = 0.0
+    vq_enabled: bool = True
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, object] | None) -> "ObjectEncoderConfig":
         if data is None:
             return cls()
+        vq_enabled = bool(data.get("vq_enabled", data.get("use_vq", cls.vq_enabled)))
+        num_embeddings_value = data.get("num_embeddings", cls.num_embeddings)
+        if not vq_enabled:
+            num_embeddings_value = None
         return cls(
             hidden_dim=int(data.get("hidden_dim", cls.hidden_dim)),
-            num_embeddings=data.get("num_embeddings", cls.num_embeddings),
+            num_embeddings=num_embeddings_value,
             commitment_cost=float(data.get("commitment_cost", cls.commitment_cost)),
             ema_decay=data.get("ema_decay", cls.ema_decay),
             vq_refresh_enabled=bool(data.get("vq_refresh_enabled", cls.vq_refresh_enabled)),
@@ -95,6 +100,7 @@ class ObjectEncoderConfig:
             relational_layers=int(data.get("relational_layers", cls.relational_layers)),
             relational_heads=int(data.get("relational_heads", cls.relational_heads)),
             relational_dropout=float(data.get("relational_dropout", cls.relational_dropout)),
+            vq_enabled=vq_enabled,
         )
 
 
