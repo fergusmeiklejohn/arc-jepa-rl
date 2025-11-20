@@ -34,6 +34,7 @@ uv pip install --python .venv/bin/python -r requirements-rl.txt
 | `pyyaml>=6.0`     | Config parsing for scripts and generators         | `requirements.txt`     |
 | `gymnasium>=0.29` | RLlib/Gym env wrappers for latent option env      | `requirements.txt`     |
 | `pytest>=8.0`     | Test suite                                       | `requirements-dev.txt` |
+| `hypothesis>=6.112` | Property-based testing for DSL invariants        | `requirements-dev.txt` |
 | `ray[rllib]>=2.9` | PPO/A2C training stack (optional feature)         | `requirements-rl.txt`  |
 | `beads-mcp`       | Optional MCP server for issue tracking workflows  | (documented in Agents.md) |
 

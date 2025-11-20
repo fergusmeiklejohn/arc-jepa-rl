@@ -1,3 +1,4 @@
 # Development and test dependencies
 -r requirements.txt
 pytest>=8.0
+hypothesis>=6.112
