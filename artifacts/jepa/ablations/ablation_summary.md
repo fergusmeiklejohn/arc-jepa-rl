@@ -7,3 +7,5 @@
 | vq_relational | +VQ + relational attention stack. | 0.6931 | 1.000 | 0.008 |
 | vq_relational_invariance | +VQ + relational + invariance penalties (color/translation/symmetry). | 0.8030 | 1.000 | 0.016 |
 | vq_relational_invariance_sigreg | +VQ + relational + invariance + SIGReg regularisation. | 0.8192 | 1.000 | 0.016 |
+
+Recommendation: On shared tiny manifests, invariance + SIGReg increased loss without alignment gains; prefer the VQ + relational variant for fast runs and reserve invariance/SIGReg for larger-scale training.

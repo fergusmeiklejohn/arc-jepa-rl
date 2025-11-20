@@ -22,7 +22,7 @@ def build_scorer():
         },
     }
     trainer = ObjectCentricJEPATrainer(config)
-    return LatentScorer(trainer.object_encoder, device="cpu")
+    return LatentScorer(trainer.object_encoder, device="cpu", return_codes=False)
 
 
 def test_latent_env_successful_option_finishes_episode():
@@ -157,3 +157,12 @@ def test_novelty_bonus_decreases_on_revisit():
 
     assert reward2 <= reward1
     assert info2["novelty"] <= info1["novelty"]
+
+
+def test_latent_scorer_can_return_codes():
+    scorer = build_scorer()
+    grid = Grid([[1, 0], [0, 1]])
+    embedding, codes = scorer.embed(grid, include_codes=True)
+    assert embedding.shape[0] > 0
+    assert codes is not None
+    assert codes.shape[0] == 1

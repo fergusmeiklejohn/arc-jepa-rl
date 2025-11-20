@@ -112,6 +112,7 @@ class LatentScorer:
         projection_head: Optional[ProjectionHead] = None,
         device: str | torch.device | None = None,
         detach: bool = True,
+        return_codes: bool = False,
     ) -> None:
         _ensure_torch()
         self.encoder = encoder
@@ -121,11 +122,13 @@ class LatentScorer:
             self.projection_head.to(self.device)
 
         self.detach = detach
+        self.return_codes = return_codes
 
-    def embed(self, grid: Grid) -> torch.Tensor:
+    def embed(self, grid: Grid, *, include_codes: bool | None = None):
         batch = self.encoder.encode([grid], device=self.device)
         embedding = batch.embeddings
         mask = batch.mask
+        codes = batch.vq_indices
 
         pooled = (embedding * mask.unsqueeze(-1)).sum(dim=1) / torch.clamp(mask.sum(dim=1, keepdim=True), min=1.0)
         pooled = pooled.squeeze(0)
@@ -137,6 +140,11 @@ class LatentScorer:
 
         if self.detach:
             pooled = pooled.detach()
+            if codes is not None:
+                codes = codes.detach()
+
+        if include_codes or (include_codes is None and self.return_codes):
+            return pooled, codes
         return pooled
 
     def distance(self, a: torch.Tensor, b: torch.Tensor, metric: str = "cosine") -> torch.Tensor:
