@@ -8,10 +8,12 @@ from .arc_latent_env import (
     RewardConfig,
     TorchUnavailableError,
     default_options,
+    HierarchicalArcOptionEnv,
 )
 
 __all__ = [
     "ArcLatentOptionEnv",
+    "HierarchicalArcOptionEnv",
     "LatentScorer",
     "make_primitive_option",
     "Option",

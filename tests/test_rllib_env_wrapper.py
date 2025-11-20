@@ -2,7 +2,14 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from training.rllib_utils.env import GYMNASIUM_API, GYM_AVAILABLE, LatentOptionRLLibEnv
+from arcgen import Grid
+from envs.arc_latent_env import HierarchicalArcOptionEnv, Option
+from training.rllib_utils.env import (
+    GYMNASIUM_API,
+    GYM_AVAILABLE,
+    HierarchicalOptionRLLibEnv,
+    LatentOptionRLLibEnv,
+)
 
 pytestmark = pytest.mark.skipif(not GYM_AVAILABLE, reason="gym/gymnasium not installed")
 
@@ -71,3 +78,48 @@ def test_rllib_env_reset_and_step_shapes():
         assert isinstance(done, bool)
     assert next_obs["current"].shape == (3, 3)
     assert isinstance(reward, float)
+
+
+def test_hierarchical_env_termination_action():
+    env = HierarchicalOptionRLLibEnv(_env_config())
+    reset_output = env.reset()
+    obs = reset_output[0] if GYMNASIUM_API else reset_output
+    assert "action_mask" in obs
+
+    terminate_action = env.action_space.n - 1
+    step_output = env.step(terminate_action)
+    if GYMNASIUM_API:
+        _, _, terminated, truncated, info = step_output
+        assert terminated or truncated
+    else:
+        _, _, done, info = step_output
+        assert done
+    assert info.get("terminated", True)
+
+
+def test_hierarchical_arc_env_executes_manager_option():
+    class DummyScorer:
+        def embed(self, grid):
+            value = float(sum(sum(row) for row in grid.cells))
+            return torch.tensor([value])
+
+        def distance(self, a, b, metric="cosine"):
+            return torch.abs(a - b)
+
+    target_grid = Grid([[1, 1], [1, 1]])
+    start_grid = Grid([[0, 0], [0, 0]])
+
+    options = (
+        Option(name="noop", apply=lambda g: g),
+        Option(name="to_target", apply=lambda _g: target_grid),
+    )
+    env = HierarchicalArcOptionEnv(
+        options=options,
+        scorer=DummyScorer(),
+        reward_config={"success_threshold": 0.01, "step_penalty": 0.0, "success_bonus": 1.0},
+    )
+    env.reset(task=(start_grid, target_grid))
+    grid, reward, done, info = env.step(1)
+    assert grid.cells == target_grid.cells
+    assert done
+    assert info.get("success")

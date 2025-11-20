@@ -8,7 +8,7 @@ from .builders import (
 )
 from .bc_data import BehavioralCloningDataset, load_option_traces, split_records
 from .bc_trainer import train_behavioral_cloning
-from .env import LatentOptionRLLibEnv, LatentTaskSampler
+from .env import HierarchicalOptionRLLibEnv, LatentOptionRLLibEnv, LatentTaskSampler
 from .models import (
     ActorCriticConfig,
     ActorCriticCore,
@@ -21,6 +21,7 @@ from .models import (
 __all__ = [
     "LatentOptionRLLibEnv",
     "LatentTaskSampler",
+    "HierarchicalOptionRLLibEnv",
     "build_env_reward_config",
     "build_latent_scorer_from_config",
     "build_options_from_config",

@@ -26,7 +26,7 @@ except Exception:  # pragma: no cover
         GYM_AVAILABLE = False
 
 from arcgen import GeneratorConfig, Grid, SyntheticARCGenerator, SyntheticTask
-from envs import ArcLatentOptionEnv
+from envs import ArcLatentOptionEnv, HierarchicalArcOptionEnv
 
 from .builders import (
     build_env_reward_config,
@@ -61,6 +61,12 @@ if not GYM_AVAILABLE:
 
         def __init__(self, *_args, **_kwargs) -> None:  # pragma: no cover - depends on env setup
             raise RuntimeError("gym or gymnasium is required to instantiate LatentOptionRLLibEnv")
+
+    class HierarchicalOptionRLLibEnv:  # type: ignore[misc]
+        """Fallback stub when gym/gymnasium is unavailable."""
+
+        def __init__(self, *_args, **_kwargs) -> None:  # pragma: no cover - depends on env setup
+            raise RuntimeError("gym or gymnasium is required to instantiate HierarchicalOptionRLLibEnv")
 
 else:
 
@@ -171,4 +177,114 @@ else:
             return self._base_env.render()
 
 
-__all__ = ["LatentOptionRLLibEnv", "LatentTaskSampler", "GYMNASIUM_API", "GYM_AVAILABLE"]
+    class HierarchicalOptionRLLibEnv(gym.Env):
+        """Gym wrapper that exposes manager termination action."""
+
+        metadata = {"render.modes": ["ansi"]}
+
+        def __init__(self, config: MutableMapping[str, object]):
+            generator_cfg = GeneratorConfig(**(config.get("generator", {}) or {}))
+            self._generator = SyntheticARCGenerator(
+                generator_cfg,
+                seed=config.get("seed"),
+                allowed_primitives=config.get("allowed_primitives"),
+            )
+            schedule = config.get("task_schedule") or {"atomic": 1}
+            if not isinstance(schedule, Mapping):
+                raise TypeError("task_schedule must be a mapping of phase -> weight")
+            self._task_sampler = LatentTaskSampler(self._generator, schedule)
+
+            jepa_cfg = config.get("jepa_config")
+            if jepa_cfg is None:
+                raise ValueError("env_config missing 'jepa_config'")
+            scorer = build_latent_scorer_from_config(jepa_cfg, device=str(config.get("device", "cpu")))
+            options = build_options_from_config(config.get("options", {}))
+            reward_cfg = build_env_reward_config(config.get("reward", {}))
+            max_steps = int(config.get("max_steps", 8))
+            terminate_on_exact = bool(config.get("terminate_on_exact_match", True))
+
+            self._env = HierarchicalArcOptionEnv(
+                options=options,
+                scorer=scorer,
+                reward_config=reward_cfg,
+                max_steps=max_steps,
+                terminate_on_exact_match=terminate_on_exact,
+            )
+
+            pad_size = int(generator_cfg.max_grid_size)
+            self._pad_shape = (pad_size, pad_size)
+            self._background = generator_cfg.background_color
+            high_value = max(generator_cfg.max_colors, self._background + 1)
+
+            grid_box = spaces.Box(
+                low=0,
+                high=high_value,
+                shape=self._pad_shape,
+                dtype=np.int32,
+            )
+
+            action_mask = np.ones((self._env.action_space_n,), dtype=np.float32)
+            self.observation_space = spaces.Dict(
+                {
+                    "current": grid_box,
+                    "target": grid_box,
+                    "steps": spaces.Box(low=0, high=max_steps, shape=(1,), dtype=np.int32),
+                    "action_mask": spaces.Box(low=0.0, high=1.0, shape=action_mask.shape, dtype=np.float32),
+                }
+            )
+            self.action_space = spaces.Discrete(self._env.action_space_n)
+            self._last_task: Dict[str, object] | None = None
+
+        def _grid_to_array(self, grid: Grid) -> np.ndarray:
+            array = np.full(self._pad_shape, self._background, dtype=np.int32)
+            cells = grid.to_lists()
+            height = min(len(cells), self._pad_shape[0])
+            for row_idx in range(height):
+                width = min(len(cells[row_idx]), self._pad_shape[1])
+                array[row_idx, :width] = cells[row_idx][:width]
+            return array
+
+        def _build_observation(self, current: Grid, target: Grid) -> Dict[str, np.ndarray]:
+            mask = np.ones((self.action_space.n,), dtype=np.float32)
+            obs = {
+                "current": self._grid_to_array(current),
+                "target": self._grid_to_array(target),
+                "steps": np.array([self._env._base.steps], dtype=np.int32),
+                "action_mask": mask,
+            }
+            return obs
+
+        def reset(self, *, seed: int | None = None, options: Dict | None = None):  # type: ignore[override]
+            if seed is not None:
+                random.seed(seed)
+            task = self._task_sampler.sample_task()
+            self._env.reset(task=(task.input_grid, task.output_grid))
+            self._last_task = {"task_id": task.task_id, "target": task.output_grid, "start": task.input_grid}
+            obs = self._build_observation(task.input_grid, task.output_grid)
+            info = {"task_id": task.task_id, "phase": task.phase}
+            if GYMNASIUM_API:
+                return obs, info
+            return obs
+
+        def step(self, action):  # type: ignore[override]
+            grid, reward, done, info = self._env.step(int(action))
+            target_grid = self._last_task["target"] if self._last_task else grid
+            obs = self._build_observation(grid, target_grid)
+            success = bool(info.get("success"))
+            terminated = done
+            truncated = done and not success
+            if GYMNASIUM_API:
+                return obs, reward, terminated, truncated, info
+            return obs, reward, done, info
+
+        def render(self):  # pragma: no cover - delegated to base env
+            return self._env._base.render()
+
+
+__all__ = [
+    "LatentOptionRLLibEnv",
+    "HierarchicalOptionRLLibEnv",
+    "LatentTaskSampler",
+    "GYMNASIUM_API",
+    "GYM_AVAILABLE",
+]

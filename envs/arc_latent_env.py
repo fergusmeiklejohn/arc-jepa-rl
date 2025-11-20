@@ -271,3 +271,61 @@ class ArcLatentOptionEnv:
         for row in self._state.cells:
             lines.append(" ".join(str(value) for value in row))
         return "\n".join(lines)
+
+
+class HierarchicalArcOptionEnv:
+    """Wrap :class:`ArcLatentOptionEnv` with a manager termination action."""
+
+    def __init__(
+        self,
+        options: Sequence[Option],
+        scorer: LatentScorer,
+        *,
+        reward_config: RewardConfig | Mapping[str, object],
+        max_steps: int = 8,
+        terminate_on_exact_match: bool = True,
+    ) -> None:
+        self._base = ArcLatentOptionEnv(
+            options=options,
+            scorer=scorer,
+            reward_config=reward_config,
+            max_steps=max_steps,
+            terminate_on_exact_match=terminate_on_exact_match,
+        )
+        self._terminate_index = len(self._base.options)
+
+    def reset(self, *, task: Tuple[Grid, Grid]) -> Grid:
+        return self._base.reset(task=task)
+
+    def step(self, manager_action: int) -> Tuple[Grid, float, bool, dict]:
+        if manager_action < 0 or manager_action > self._terminate_index:
+            raise IndexError("manager action index out of range")
+        if manager_action == self._terminate_index:
+            if self._base._state is None or self._base._target_grid is None or self._base._target_embedding is None:
+                raise RuntimeError("environment must be reset before stepping")
+            reward = -self._base.reward_cfg.step_penalty
+            current_distance = self._base.scorer.distance(
+                self._base._current_embedding,
+                self._base._target_embedding,
+                metric=self._base.reward_cfg.metric,
+            )
+            success = bool(current_distance.item() <= self._base.reward_cfg.success_threshold)
+            if self._base._state.cells == self._base._target_grid.cells:
+                success = True
+            if success:
+                reward += self._base.reward_cfg.success_bonus
+            info = {
+                "terminated": True,
+                "success": success,
+                "current_distance": float(current_distance.item()),
+            }
+            return self._base._state, float(reward), True, info
+
+        grid, reward, done, info = self._base.step(manager_action)
+        info["terminated"] = done
+        info["manager_action"] = manager_action
+        return grid, reward, done, info
+
+    @property
+    def action_space_n(self) -> int:
+        return len(self._base.options) + 1
