@@ -12,7 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from training.eval import load_synthetic_tasks_jsonl
 from training.meta_jepa import MetaJEPATrainer, TrainingConfig, build_rule_family_examples
-from training.utils import EarlyStoppingConfig
+from training.utils import EarlyStoppingConfig, GradientClippingConfig, LRSchedulerConfig
 
 try:  # pragma: no cover - optional dependency
     import torch
@@ -93,6 +93,26 @@ def parse_args() -> argparse.Namespace:
         default=0.0,
         help="Minimum improvement in validation loss to reset patience",
     )
+    parser.add_argument("--grad-clip-norm", type=float, default=0.0, help="Max gradient norm (0 disables)")
+    parser.add_argument(
+        "--lr-scheduler",
+        type=str,
+        default="none",
+        choices=["none", "linear", "cosine"],
+        help="Enable LR scheduler",
+    )
+    parser.add_argument(
+        "--lr-warmup-steps",
+        type=int,
+        default=0,
+        help="Warmup steps for LR scheduler",
+    )
+    parser.add_argument(
+        "--lr-min-scale",
+        type=float,
+        default=0.1,
+        help="Minimum LR scale for scheduler decay (0-1)",
+    )
     parser.add_argument("--output", type=Path, default=None, help="Optional path to write trained weights (.pt)")
     return parser.parse_args()
 
@@ -137,6 +157,12 @@ def main() -> None:
         validation_split=max(0.0, args.val_split),
         split_seed=args.split_seed,
         early_stopping=early_stopping_cfg,
+        grad_clip=GradientClippingConfig(max_norm=max(0.0, args.grad_clip_norm)),
+        lr_scheduler=LRSchedulerConfig(
+            name=args.lr_scheduler,
+            warmup_steps=max(0, args.lr_warmup_steps),
+            min_lr_scale=max(0.0, min(1.0, args.lr_min_scale)),
+        ),
     )
     result = trainer.fit(config)
 

@@ -24,5 +24,11 @@ train:
   batch_size: 32
   lr: 0.001
   weight_decay: 0.0
+  grad_clip:
+    max_norm: 1.0
+  lr_scheduler:
+    name: "cosine"
+    warmup_steps: 50
+    min_lr_scale: 0.2
 
 color_constants: [0, 1, 2, 3]

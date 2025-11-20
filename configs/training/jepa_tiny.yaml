@@ -34,6 +34,14 @@ training:
   checkpoint_dir: artifacts/jepa/tiny_run
   device: cpu
   amp: false
+  grad_accum_steps: 1
+  grad_clip:
+    max_norm: 1.0
+    norm_type: 2.0
+  lr_scheduler:
+    name: "cosine"
+    warmup_steps: 2
+    min_lr_scale: 0.2
 
 logging:
   enabled: true

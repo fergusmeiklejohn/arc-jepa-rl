@@ -4,6 +4,7 @@ from .seed import set_global_seeds
 from .logging import ExperimentLogger, create_experiment_logger
 from .grid import count_changed_cells
 from .early_stopping import EarlyStopping, EarlyStoppingConfig
+from .optimization import GradientClippingConfig, LRSchedulerConfig, build_lr_scheduler
 
 __all__ = [
     "set_global_seeds",
@@ -12,4 +13,7 @@ __all__ = [
     "count_changed_cells",
     "EarlyStopping",
     "EarlyStoppingConfig",
+    "GradientClippingConfig",
+    "LRSchedulerConfig",
+    "build_lr_scheduler",
 ]

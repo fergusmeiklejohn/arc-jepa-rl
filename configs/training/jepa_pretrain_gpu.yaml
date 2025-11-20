@@ -46,6 +46,13 @@ training:
   drop_last: true
   amp: true
   pin_memory: true
+  grad_clip:
+    max_norm: 1.0
+    norm_type: 2.0
+  lr_scheduler:
+    name: "cosine"
+    warmup_steps: 1000
+    min_lr_scale: 0.05
 
 augmentations:
   mask_ratio: 0.15

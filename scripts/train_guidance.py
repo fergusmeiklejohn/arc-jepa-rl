@@ -25,7 +25,13 @@ from training.dsl import (
 )
 from training.jepa import ObjectCentricJEPATrainer
 from training.modules.projection import ProjectionHead
-from training.utils import EarlyStopping, EarlyStoppingConfig
+from training.utils import (
+    EarlyStopping,
+    EarlyStoppingConfig,
+    GradientClippingConfig,
+    LRSchedulerConfig,
+    build_lr_scheduler,
+)
 
 try:  # pragma: no cover - optional dependency at runtime
     import torch
@@ -129,6 +135,8 @@ def main() -> None:
     batch_size = int(train_cfg.get("batch_size", 32))
     lr = float(train_cfg.get("lr", 1e-3))
     weight_decay = float(train_cfg.get("weight_decay", 0.0))
+    grad_clip_cfg = GradientClippingConfig.from_mapping(train_cfg.get("grad_clip"))
+    lr_scheduler_cfg = LRSchedulerConfig.from_mapping(train_cfg.get("lr_scheduler"))
     val_split = float(train_cfg.get("validation_split", 0.0))
     split_seed = train_cfg.get("split_seed", train_cfg.get("seed", dsl_cfg.get("seed")))
     train_dataset = dataset
@@ -164,6 +172,11 @@ def main() -> None:
         val_batch = min(batch_size, len(val_dataset))
         val_loader = DataLoader(val_dataset, batch_size=val_batch, shuffle=False)
     optimizer = torch.optim.Adam(scorer.parameters(), lr=lr, weight_decay=weight_decay)
+    try:
+        total_steps = max(1, len(dataloader)) * max(1, epochs)
+    except Exception:
+        total_steps = None
+    scheduler = build_lr_scheduler(optimizer, lr_scheduler_cfg, total_steps=total_steps)
     early_cfg = EarlyStoppingConfig.from_mapping(train_cfg.get("early_stopping"))
     early_stopper = EarlyStopping(early_cfg)
     if early_cfg.enabled and val_loader is None:
@@ -198,7 +211,15 @@ def main() -> None:
             loss = torch.nn.functional.mse_loss(preds, labels)
             optimizer.zero_grad()
             loss.backward()
+            if grad_clip_cfg.enabled:
+                torch.nn.utils.clip_grad_norm_(
+                    scorer.parameters(),
+                    max_norm=grad_clip_cfg.max_norm,
+                    norm_type=grad_clip_cfg.norm_type,
+                )
             optimizer.step()
+            if scheduler is not None:
+                scheduler.step()
             epoch_loss += loss.item()
             batches += 1
 

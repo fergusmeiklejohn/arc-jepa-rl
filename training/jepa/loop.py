@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import math
 from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Iterable, Mapping, Sequence
@@ -24,6 +25,7 @@ from .object_pipeline import ObjectCentricEncoding, ObjectCentricJEPAEncoder, Ob
 from .sigreg import SIGRegLoss, SIGRegLossConfig
 
 from training.modules.projection import InfoNCEQueue, ProjectionHead
+from training.utils.optimization import GradientClippingConfig, LRSchedulerConfig, build_lr_scheduler
 
 try:  # pragma: no cover - optional
     import torch
@@ -128,9 +130,15 @@ class ObjectCentricJEPAExperiment:
         if isinstance(training_cfg, Mapping):
             self.grad_accum_steps = max(1, int(training_cfg.get("grad_accum_steps", 1)))
             self._amp_requested = bool(training_cfg.get("amp", False))
+            self._planned_epochs = int(training_cfg.get("epochs", 1))
+            self.grad_clip_config = GradientClippingConfig.from_mapping(training_cfg.get("grad_clip"))
+            self.lr_scheduler_config = LRSchedulerConfig.from_mapping(training_cfg.get("lr_scheduler"))
         else:
             self.grad_accum_steps = 1
             self._amp_requested = False
+            self._planned_epochs = 1
+            self.grad_clip_config = GradientClippingConfig.from_mapping(None)
+            self.lr_scheduler_config = LRSchedulerConfig.from_mapping(None)
 
         self._amp_enabled = False
         self._grad_scaler: GradScaler | None = None
@@ -192,11 +200,14 @@ class ObjectCentricJEPAExperiment:
         if self.loss_config.learnable_temperature:
             params.append(self.log_temperature)
 
+        self._trainable_parameters = [param for param in params if param.requires_grad]
+
         self.optimizer = torch.optim.Adam(
             params,
             lr=opt_cfg.lr,
             weight_decay=opt_cfg.weight_decay,
         )
+        self._lr_scheduler = None
 
         diagnostics_cfg = config.get("diagnostics")
         if diagnostics_cfg is not None and not isinstance(diagnostics_cfg, Mapping):
@@ -478,6 +489,8 @@ class ObjectCentricJEPAExperiment:
         pending_losses: list[torch.Tensor] = []
         pending_targets: list[torch.Tensor] = []
 
+        self._ensure_scheduler(dataset)
+
         def _apply_pending() -> None:
             if not pending_losses:
                 return
@@ -556,6 +569,7 @@ class ObjectCentricJEPAExperiment:
         if epochs <= 0:
             raise ValueError("epochs must be positive")
 
+        self.set_planned_epochs(epochs)
         losses = []
         for _ in range(epochs):
             epoch_loss = self.train_epoch(dataset)
@@ -623,14 +637,74 @@ class ObjectCentricJEPAExperiment:
             return nullcontext()
         return cuda_autocast(dtype=self._amp_dtype)
 
+    def _clip_gradients(self) -> None:
+        if torch is None:  # pragma: no cover - defensive
+            return
+        if not self.grad_clip_config.enabled:
+            return
+        if self._grad_scaler is not None:
+            self._grad_scaler.unscale_(self.optimizer)
+        parameters = [p for p in self._trainable_parameters if p.grad is not None]
+        if not parameters:
+            return
+        torch.nn.utils.clip_grad_norm_(
+            parameters,
+            max_norm=self.grad_clip_config.max_norm,
+            norm_type=self.grad_clip_config.norm_type,
+        )
+
     def _step_optimizer(self, loss: torch.Tensor) -> None:
         if self._grad_scaler is not None:
             self._grad_scaler.scale(loss).backward()
+            self._clip_gradients()
             self._grad_scaler.step(self.optimizer)
             self._grad_scaler.update()
         else:
             loss.backward()
+            self._clip_gradients()
             self.optimizer.step()
+        if self._lr_scheduler is not None:
+            self._lr_scheduler.step()
+
+    def set_planned_epochs(self, epochs: int) -> None:
+        self._planned_epochs = max(1, int(epochs))
+
+    def configure_scheduler(self, total_steps: int | None = None) -> None:
+        if not self.lr_scheduler_config.enabled:
+            self._lr_scheduler = None
+            return
+        self._lr_scheduler = build_lr_scheduler(
+            self.optimizer,
+            self.lr_scheduler_config,
+            total_steps=total_steps,
+        )
+
+    def _estimate_total_steps(self, dataset_length: int | None) -> int | None:
+        if dataset_length is None or dataset_length <= 0:
+            return None
+        steps_per_epoch = math.ceil(dataset_length / self.grad_accum_steps)
+        return steps_per_epoch * max(1, self._planned_epochs)
+
+    def _ensure_scheduler(self, dataset: Iterable[GridPairBatch | TokenizedPairBatch]) -> None:
+        if self._lr_scheduler is not None or not self.lr_scheduler_config.enabled:
+            return
+        total_steps = self.lr_scheduler_config.total_steps
+        if total_steps is None:
+            length = None
+            try:
+                length = len(dataset)  # type: ignore[arg-type]
+            except Exception:
+                length = None
+            total_steps = self._estimate_total_steps(length)
+        if total_steps is None:
+            warnings.warn(
+                "lr_scheduler configured but total steps unknown; call configure_scheduler(...) "
+                "to enable scheduling",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return
+        self.configure_scheduler(total_steps)
 
     def _prepare_queue_projection(self, target_proj: torch.Tensor) -> torch.Tensor:
         proj = target_proj.detach()

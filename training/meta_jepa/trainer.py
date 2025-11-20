@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Iterable, List, Mapping, Sequence, Tuple
 
 try:  # pragma: no cover - torch optional
@@ -24,7 +24,13 @@ from .data import (
     build_rule_family_dataset,
 )
 from .model import MetaJEPAModel, contrastive_loss
-from training.utils import EarlyStopping, EarlyStoppingConfig
+from training.utils import (
+    EarlyStopping,
+    EarlyStoppingConfig,
+    GradientClippingConfig,
+    LRSchedulerConfig,
+    build_lr_scheduler,
+)
 
 
 def _ensure_torch() -> None:
@@ -47,6 +53,8 @@ class TrainingConfig:
     validation_split: float = 0.0
     split_seed: int | None = None
     early_stopping: EarlyStoppingConfig = EarlyStoppingConfig()
+    grad_clip: GradientClippingConfig = field(default_factory=GradientClippingConfig)
+    lr_scheduler: LRSchedulerConfig = field(default_factory=LRSchedulerConfig)
 
 
 @dataclass
@@ -175,6 +183,13 @@ class MetaJEPATrainer:
         early_stopper = EarlyStopping(config.early_stopping)
         if config.early_stopping.enabled and val_loader is None:
             raise ValueError("validation_split must be > 0 when early stopping is enabled")
+        try:
+            steps_per_epoch = len(loader)
+            total_steps = max(1, steps_per_epoch) * max(1, config.epochs)
+        except Exception:
+            total_steps = None
+        scheduler = build_lr_scheduler(optimizer, config.lr_scheduler, total_steps=total_steps)
+        grad_clip_cfg = config.grad_clip
 
         def current_temperature() -> "torch.Tensor":
             temperature = torch.exp(log_temperature)
@@ -206,7 +221,15 @@ class MetaJEPATrainer:
                     loss = loss + config.relational_weight * relational_loss
                 if loss.requires_grad:
                     loss.backward()
+                    if grad_clip_cfg.enabled:
+                        torch.nn.utils.clip_grad_norm_(
+                            model.parameters(),
+                            max_norm=grad_clip_cfg.max_norm,
+                            norm_type=grad_clip_cfg.norm_type,
+                        )
                     optimizer.step()
+                    if scheduler is not None:
+                        scheduler.step()
                     epoch_loss += float(loss.item())
                     batches += 1
             history.append(epoch_loss / max(1, batches))

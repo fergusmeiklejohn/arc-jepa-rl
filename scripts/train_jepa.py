@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 import sys
 from typing import Mapping
@@ -73,6 +74,18 @@ def main() -> None:
     early_stopper = EarlyStopping(early_stopping_cfg)
 
     epochs = int(training_cfg.get("epochs", 1))
+    experiment.set_planned_epochs(epochs)
+
+    total_steps = None
+    try:
+        steps_per_epoch = len(train_loader)
+        if steps_per_epoch > 0:
+            optimizer_steps = math.ceil(steps_per_epoch / experiment.grad_accum_steps)
+            total_steps = optimizer_steps * max(1, epochs)
+    except TypeError:
+        total_steps = None
+    if total_steps is not None:
+        experiment.configure_scheduler(total_steps)
 
     checkpoint_dir = Path(training_cfg.get("checkpoint_dir", "artifacts/jepa/pretrain"))
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
