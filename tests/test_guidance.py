@@ -132,6 +132,7 @@ def test_guided_beam_search_scores_programs():
         dummy_latent_embedder(target),
         enumerator,
         context,
+        target,
     )
 
     assert results

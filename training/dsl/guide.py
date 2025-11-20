@@ -26,6 +26,7 @@ from .types import Grid as GridType
 
 if TYPE_CHECKING:  # pragma: no cover
     from training.meta_jepa.prior import MetaJEPAPrior
+    from training.solver.constraints import ConstraintChecker
 
 
 class GuidanceModuleUnavailable(RuntimeError):
@@ -206,6 +207,7 @@ class GuidedBeamSearch:
         length_penalty: float = 0.05,
         meta_prior: "MetaJEPAPrior | None" = None,
         meta_weight: float = 0.2,
+        constraint_checker: "ConstraintChecker | None" = None,
     ) -> None:
         self.registry = registry
         self.scorer = scorer
@@ -216,6 +218,7 @@ class GuidedBeamSearch:
         self.length_penalty = length_penalty
         self.meta_prior = meta_prior
         self.meta_weight = float(meta_weight)
+        self.constraint_checker = constraint_checker
 
     def search(
         self,
@@ -223,9 +226,11 @@ class GuidedBeamSearch:
         latent_target: torch.Tensor,
         enumerator: ProgramEnumerator,
         input_grid: Grid,
+        target_grid: Grid,
         *,
         cache=None,
         mdl_weight: float = 0.0,
+        constraint_checker: "ConstraintChecker | None" = None,
     ) -> List[Tuple[Program, float]]:
         candidates = list(enumerator.enumerate())
 
@@ -235,8 +240,11 @@ class GuidedBeamSearch:
         device = latent_context.device
         scores: List[Tuple[Program, float]] = []
         error_marker = getattr(cache, "ERROR", None) if cache is not None else None
+        checker = constraint_checker or self.constraint_checker
 
         for program in candidates:
+            if checker is not None and checker.pre_check(program, input_grid, target_grid):
+                continue
             prog_embedding = self.program_encoder(program)
             length = len(program)
             output_grid = None
@@ -262,6 +270,9 @@ class GuidedBeamSearch:
                     cache.store_success(program, input_grid, output_grid)
 
             if not isinstance(output_grid, Grid):
+                continue
+
+            if checker is not None and checker.post_check(program, input_grid, output_grid, target_grid):
                 continue
 
             candidate_embedding = self.latent_encoder(output_grid)

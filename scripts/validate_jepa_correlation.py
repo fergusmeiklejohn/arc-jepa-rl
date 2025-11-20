@@ -68,6 +68,7 @@ class LatentDistanceBeam:
         latent_target: torch.Tensor,
         enumerator,
         input_grid: Grid,
+        target_grid: Grid,
         *,
         cache=None,
         mdl_weight: float = 0.0,

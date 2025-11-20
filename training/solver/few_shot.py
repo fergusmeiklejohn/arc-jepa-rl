@@ -149,8 +149,10 @@ class FewShotSolver:
             latent_target,
             enumerator,
             first_input,
+            first_target,
             cache=self._cache,
             mdl_weight=self.mdl_weight,
+            constraint_checker=self.constraint_checker,
         )
         for program, score in candidates:
             if self._consistent(program, examples):
