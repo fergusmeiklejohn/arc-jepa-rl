@@ -1,0 +1,41 @@
+# Five-phase curriculum configuration for ARC latent option training
+phases:
+  - name: "I_atomic"
+    task_schedule: {"atomic": 1}
+    min_episodes: 20
+    thresholds:
+      solve_rate: 0.65
+      codebook_usage: 0.05
+      option_diversity: 0.05
+
+  - name: "II_sequential"
+    task_schedule: {"sequential": 1, "atomic": 1}
+    min_episodes: 30
+    thresholds:
+      solve_rate: 0.7
+      codebook_usage: 0.08
+      option_diversity: 0.08
+
+  - name: "III_relational"
+    task_schedule: {"relational": 1, "sequential": 1}
+    min_episodes: 30
+    thresholds:
+      solve_rate: 0.7
+      codebook_usage: 0.1
+      option_diversity: 0.1
+
+  - name: "IV_conditional_meta"
+    task_schedule: {"conditional": 1, "relational": 1}
+    min_episodes: 40
+    thresholds:
+      solve_rate: 0.75
+      codebook_usage: 0.12
+      option_diversity: 0.12
+
+  - name: "V_ood_generalization"
+    task_schedule: {"ood": 1, "conditional": 1}
+    min_episodes: 50
+    thresholds:
+      solve_rate: 0.8
+      codebook_usage: 0.15
+      option_diversity: 0.15
