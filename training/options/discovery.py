@@ -21,6 +21,7 @@ def _default_invariants() -> Tuple[InvariantFn, ...]:
 
 
 def _apply_sequence(sequence: Sequence[Option], grid: Grid) -> Grid:
+    """Apply a sequence of options to a grid, returning the final state."""
     state = grid
     for option in sequence:
         state = option.apply(state)
@@ -118,7 +119,31 @@ def discover_option_sequences(
     allow_singleton: bool = False,
     name_prefix: str = "auto",
 ) -> List[DiscoveredOption]:
-    """Discover frequently successful option sequences that behave like new primitives."""
+    """Discover frequently successful option sequences that behave like new primitives.
+
+    The miner walks each episode, checking every contiguous subsequence up to
+    ``max_sequence_length``. A sequence is kept when:
+      - It meets ``min_support`` (occurs across episodes at least this many times).
+      - It changes the grid (filters out pure no-ops).
+      - Its observed success rate >= ``min_success_rate`` (defaults to 0.6).
+      - All provided invariants hold (defaults to shape preservation).
+
+    Examples:
+        >>> from envs import make_primitive_option
+        >>> opt_a = make_primitive_option("mirror_x")
+        >>> opt_b = make_primitive_option("translate", dx=1, dy=0, fill=0)
+        >>> # Build OptionEpisode steps elsewhere...
+        >>> discovered = discover_option_sequences([episode], min_support=1, allow_singleton=False)
+        >>> discovered[0].name.startswith("auto_")
+        True
+
+    Edge cases:
+      - ``allow_singleton=False`` prunes single-option sequences so we only promote
+        genuine composites.
+      - Setting ``invariants=()`` disables shape checks (e.g., for cropping options).
+      - ``max_sequence_length=1`` + ``allow_singleton=True`` can be used to mine
+        frequently successful primitive options without recomposition.
+    """
 
     if min_support <= 0:
         raise ValueError("min_support must be positive")
@@ -203,4 +228,3 @@ def discover_option_sequences(
 
     discovered.sort(key=lambda item: (item.support, item.success_rate, item.avg_reward), reverse=True)
     return discovered
-
