@@ -196,3 +196,56 @@ def test_queue_updates_each_microbatch_with_grad_accum():
 
     negatives = experiment.queue.get_negatives()
     assert negatives.shape[0] == 6
+
+
+def test_queue_enqueue_happens_after_optimizer_step(monkeypatch):
+    config = config_with_optimizer()
+    experiment = ObjectCentricJEPAExperiment(config)
+
+    calls = []
+    original_step = experiment._step_optimizer
+    original_enqueue = experiment.queue.enqueue
+
+    def step_wrapper(loss):
+        calls.append("step")
+        return original_step(loss)
+
+    def enqueue_wrapper(tensor):
+        calls.append("enqueue")
+        return original_enqueue(tensor)
+
+    monkeypatch.setattr(experiment, "_step_optimizer", step_wrapper)
+    monkeypatch.setattr(experiment.queue, "enqueue", enqueue_wrapper)
+
+    context, target = build_sample_batch(experiment.context_length)
+    experiment.train_step(context, target)
+
+    assert calls == ["step", "enqueue"]
+
+
+def test_queue_commit_deferred_until_accumulated_step(monkeypatch):
+    config = config_with_optimizer()
+    config["training"] = {"grad_accum_steps": 2}
+    config["loss"] = {"queue_size": 16}
+    experiment = ObjectCentricJEPAExperiment(config)
+
+    events = []
+    original_step = experiment._step_optimizer
+    original_enqueue = experiment.queue.enqueue
+
+    def step_wrapper(loss):
+        events.append("step")
+        return original_step(loss)
+
+    def enqueue_wrapper(tensor):
+        events.append(f"enqueue:{tensor.shape[0]}")
+        return original_enqueue(tensor)
+
+    monkeypatch.setattr(experiment, "_step_optimizer", step_wrapper)
+    monkeypatch.setattr(experiment.queue, "enqueue", enqueue_wrapper)
+
+    dataset = build_dummy_dataset(num_batches=3, context_length=experiment.context_length, batch_size=2)
+    experiment.train_epoch(dataset)
+
+    assert events == ["step", "enqueue:4", "step", "enqueue:2"]
+    assert experiment.queue.get_negatives().shape[0] == 6
