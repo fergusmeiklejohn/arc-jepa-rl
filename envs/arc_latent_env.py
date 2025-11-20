@@ -81,6 +81,9 @@ class RewardConfig:
     invalid_penalty: float = 0.1
     distance_scale: float = 1.0
     metric: str = "cosine"  # or "l2"
+    curiosity_weight: float = 0.0
+    novelty_weight: float = 0.0
+    novelty_epsilon: float = 1e-6
 
     def validate(self) -> None:
         if self.success_threshold <= 0:
@@ -93,6 +96,10 @@ class RewardConfig:
             raise ValueError("distance_scale must be positive")
         if self.metric not in {"cosine", "l2"}:
             raise ValueError("metric must be 'cosine' or 'l2'")
+        if self.curiosity_weight < 0 or self.novelty_weight < 0:
+            raise ValueError("curiosity_weight and novelty_weight must be non-negative")
+        if self.novelty_epsilon <= 0:
+            raise ValueError("novelty_epsilon must be positive")
 
 
 class LatentScorer:
@@ -175,6 +182,7 @@ class ArcLatentOptionEnv:
         self._target_grid: Optional[Grid] = None
         self._state: Optional[Grid] = None
         self._steps = 0
+        self._visited_embeddings: list[torch.Tensor] = []
 
     def seed(self, seed: int | None = None) -> None:  # pragma: no cover - deterministic RNG handled elsewhere
         pass
@@ -193,6 +201,7 @@ class ArcLatentOptionEnv:
         self._target_embedding = self.scorer.embed(target)
         self._current_embedding = self.scorer.embed(start)
         self._steps = 0
+        self._visited_embeddings = [self._current_embedding.detach()]
         return self._state
 
     def step(self, action_index: int) -> Tuple[Grid, float, bool, dict]:
@@ -228,6 +237,8 @@ class ArcLatentOptionEnv:
             reward -= self.reward_cfg.invalid_penalty
 
         reward -= self.reward_cfg.step_penalty
+        intrinsic_reward = self._intrinsic_bonus(new_embedding)
+        reward += intrinsic_reward
 
         done = False
         success = False
@@ -247,11 +258,15 @@ class ArcLatentOptionEnv:
             done = True
 
         self._current_embedding = new_embedding.detach()
+        self._visited_embeddings.append(self._current_embedding)
         info.update(
             {
                 "prev_distance": float(prev_distance.item()),
                 "current_distance": float(current_distance.item()),
                 "success": success,
+                "prediction_error": float(self._prediction_error(new_embedding)),
+                "novelty": float(self._novelty(new_embedding)),
+                "intrinsic_reward": float(intrinsic_reward),
             }
         )
         return self._state, reward, done, info
@@ -259,6 +274,36 @@ class ArcLatentOptionEnv:
     @property
     def action_space_n(self) -> int:
         return len(self.options)
+
+    def _prediction_error(self, new_embedding: torch.Tensor) -> torch.Tensor:
+        if self._current_embedding is None:
+            return torch.tensor(0.0)
+        if self.reward_cfg.metric == "cosine":
+            current = F.normalize(self._current_embedding.unsqueeze(0), dim=-1)
+            new = F.normalize(new_embedding.unsqueeze(0), dim=-1)
+            return torch.clamp(1.0 - (current * new).sum(dim=-1), min=0.0).squeeze(0)
+        return torch.norm(new_embedding - self._current_embedding, p=2)
+
+    def _novelty(self, new_embedding: torch.Tensor) -> torch.Tensor:
+        if not self._visited_embeddings:
+            return torch.tensor(0.0)
+        distances = []
+        for past in self._visited_embeddings:
+            if self.reward_cfg.metric == "cosine":
+                past_norm = F.normalize(past.unsqueeze(0), dim=-1)
+                new_norm = F.normalize(new_embedding.unsqueeze(0), dim=-1)
+                dist = torch.clamp(1.0 - (past_norm * new_norm).sum(dim=-1), min=0.0)
+            else:
+                dist = torch.norm(new_embedding - past, p=2, dim=-1, keepdim=True)
+            distances.append(dist)
+        stacked = torch.cat(distances, dim=0)
+        return torch.clamp(stacked.min(), min=self.reward_cfg.novelty_epsilon)
+
+    def _intrinsic_bonus(self, new_embedding: torch.Tensor) -> float:
+        pred_error = self._prediction_error(new_embedding)
+        novelty = self._novelty(new_embedding)
+        bonus = self.reward_cfg.curiosity_weight * pred_error + self.reward_cfg.novelty_weight * novelty
+        return float(bonus.item())
 
     @property
     def steps(self) -> int:

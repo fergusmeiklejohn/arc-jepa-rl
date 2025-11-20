@@ -83,3 +83,77 @@ def test_reward_config_validation():
 
     with pytest.raises(ValueError):
         RewardConfig(success_threshold=0.0).validate()
+
+
+def test_curiosity_bonus_increases_reward_when_state_changes():
+    class DummyScorer:
+        def embed(self, grid: Grid):
+            return torch.tensor([float(sum(sum(row) for row in grid.cells))])
+
+        def distance(self, a, b, metric="l2"):
+            return torch.abs(a - b)
+
+    scorer = DummyScorer()
+    reward_cfg = RewardConfig(
+        success_threshold=0.001,
+        success_bonus=0.0,
+        step_penalty=0.0,
+        invalid_penalty=0.0,
+        curiosity_weight=1.0,
+        novelty_weight=0.0,
+        metric="l2",
+    )
+
+    def increment(grid: Grid) -> Grid:
+        cells = [[value + 1 for value in row] for row in grid.cells]
+        return Grid(cells)
+
+    option = Option(name="inc", apply=increment)
+    env = ArcLatentOptionEnv([option], scorer, reward_config=reward_cfg, max_steps=2)
+
+    start = Grid([[0]])
+    target = Grid([[10]])
+    env.reset(task=(start, target))
+
+    _, reward, done, info = env.step(0)
+    assert not done
+    assert info["intrinsic_reward"] > 0.0
+    assert reward > 0.0
+
+
+def test_novelty_bonus_decreases_on_revisit():
+    class DummyScorer:
+        def embed(self, grid: Grid):
+            return torch.tensor([float(sum(sum(row) for row in grid.cells))])
+
+        def distance(self, a, b, metric="l2"):
+            return torch.abs(a - b)
+
+    scorer = DummyScorer()
+    reward_cfg = RewardConfig(
+        success_threshold=0.001,
+        success_bonus=0.0,
+        step_penalty=0.0,
+        invalid_penalty=0.0,
+        curiosity_weight=0.0,
+        novelty_weight=1.0,
+        metric="l2",
+    )
+
+    def toggle(grid: Grid) -> Grid:
+        cells = [[1 - value for value in row] for row in grid.cells]
+        return Grid(cells)
+
+    option = Option(name="toggle", apply=toggle)
+    env = ArcLatentOptionEnv([option], scorer, reward_config=reward_cfg, max_steps=3)
+
+    start = Grid([[0]])
+    target = Grid([[5]])
+    env.reset(task=(start, target))
+
+    _, reward1, done1, info1 = env.step(0)
+    assert not done1
+    _, reward2, done2, info2 = env.step(0)
+
+    assert reward2 <= reward1
+    assert info2["novelty"] <= info1["novelty"]
