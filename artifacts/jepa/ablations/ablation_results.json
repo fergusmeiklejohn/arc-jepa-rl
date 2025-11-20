@@ -1,0 +1,184 @@
+[
+  {
+    "variant": {
+      "name": "baseline_infonce",
+      "description": "InfoNCE-only encoder (no VQ, no relational, invariance off, SIGReg off).",
+      "overrides": {
+        "object_encoder": {
+          "num_embeddings": null,
+          "relational": false
+        },
+        "invariance": {
+          "enabled": false,
+          "color_weight": 0.0,
+          "translation_weight": 0.0,
+          "symmetry_weight": 0.0
+        },
+        "sigreg": {
+          "weight": 0.0
+        },
+        "diagnostics": {
+          "embedding_metrics": {
+            "enabled": true,
+            "interval": 1,
+            "max_samples": 64
+          }
+        }
+      }
+    },
+    "loss": 0.6824444532394409,
+    "loss_history": [
+      0.6824444532394409
+    ],
+    "alignment_rate": 1.0,
+    "codebook_usage": null
+  },
+  {
+    "variant": {
+      "name": "vq_only",
+      "description": "+VQ bottleneck, otherwise baseline.",
+      "overrides": {
+        "object_encoder": {
+          "num_embeddings": 128,
+          "relational": false
+        },
+        "invariance": {
+          "enabled": false
+        },
+        "sigreg": {
+          "weight": 0.0
+        },
+        "diagnostics": {
+          "embedding_metrics": {
+            "enabled": true,
+            "interval": 1,
+            "max_samples": 64
+          }
+        }
+      }
+    },
+    "loss": 0.6931471824645996,
+    "loss_history": [
+      0.6931471824645996
+    ],
+    "alignment_rate": 1.0,
+    "codebook_usage": 0.015625
+  },
+  {
+    "variant": {
+      "name": "vq_relational",
+      "description": "+VQ + relational attention stack.",
+      "overrides": {
+        "object_encoder": {
+          "num_embeddings": 128,
+          "relational": true,
+          "relational_layers": 2,
+          "relational_heads": 4
+        },
+        "invariance": {
+          "enabled": false
+        },
+        "sigreg": {
+          "weight": 0.0
+        },
+        "diagnostics": {
+          "embedding_metrics": {
+            "enabled": true,
+            "interval": 1,
+            "max_samples": 64
+          }
+        }
+      }
+    },
+    "loss": 0.6931471824645996,
+    "loss_history": [
+      0.6931471824645996
+    ],
+    "alignment_rate": 1.0,
+    "codebook_usage": 0.0078125
+  },
+  {
+    "variant": {
+      "name": "vq_relational_invariance",
+      "description": "+VQ + relational + invariance penalties (color/translation/symmetry).",
+      "overrides": {
+        "object_encoder": {
+          "num_embeddings": 128,
+          "relational": true,
+          "relational_layers": 2,
+          "relational_heads": 4
+        },
+        "invariance": {
+          "enabled": true,
+          "color_weight": 0.1,
+          "translation_weight": 0.1,
+          "translation_max_delta": 1,
+          "symmetry_weight": 0.05,
+          "symmetry_modes": [
+            "h",
+            "v"
+          ]
+        },
+        "sigreg": {
+          "weight": 0.0
+        },
+        "diagnostics": {
+          "embedding_metrics": {
+            "enabled": true,
+            "interval": 1,
+            "max_samples": 64
+          }
+        }
+      }
+    },
+    "loss": 0.8029568195343018,
+    "loss_history": [
+      0.8029568195343018
+    ],
+    "alignment_rate": 1.0,
+    "codebook_usage": 0.015625
+  },
+  {
+    "variant": {
+      "name": "vq_relational_invariance_sigreg",
+      "description": "+VQ + relational + invariance + SIGReg regularisation.",
+      "overrides": {
+        "object_encoder": {
+          "num_embeddings": 128,
+          "relational": true,
+          "relational_layers": 2,
+          "relational_heads": 4
+        },
+        "invariance": {
+          "enabled": true,
+          "color_weight": 0.1,
+          "translation_weight": 0.1,
+          "translation_max_delta": 1,
+          "symmetry_weight": 0.05,
+          "symmetry_modes": [
+            "h",
+            "v"
+          ]
+        },
+        "sigreg": {
+          "weight": 0.05,
+          "num_slices": 32,
+          "num_points": 17
+        },
+        "diagnostics": {
+          "embedding_metrics": {
+            "enabled": true,
+            "interval": 1,
+            "max_samples": 64
+          }
+        }
+      }
+    },
+    "loss": 0.8191511631011963,
+    "loss_history": [
+      0.8191511631011963
+    ],
+    "alignment_rate": 1.0,
+    "codebook_usage": 0.015625
+  }
+]
