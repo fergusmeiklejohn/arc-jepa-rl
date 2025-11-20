@@ -28,6 +28,10 @@ and evaluate out-of-distribution reasoning.
   - `train_hierarchical.py` — Launch RLlib PPO over the latent option environment using configs under `configs/training/rl/`.
   - `evaluate_arc.py` — Run the evaluation/ablation suite and emit JSON metrics.
   - `run_jepa_ablation.py` — LeJEPA ablations (InfoNCE vs +VQ/relational/invariance/SIGReg) with JSON/Markdown summaries.
+  - `prepare_program_triples.py` — Convert generator manifests into (input, program, output) triples for counterfactual JEPA.
+  - `train_program_conditioned_jepa.py` — Train the program-conditioned JEPA for latent counterfactual prediction.
+  - `train_active_reasoner.py` — Train the hypothesis-search policy on `HypothesisSearchEnv` (PPO-style updates using counterfactual JEPA latents).
+  - `pretrain_bc.py` — Bootstrap the active reasoner with behavioral cloning traces before PPO fine-tuning.
 - `tests/` — Unit and integration tests covering generators, models, and envs.
 
 ### DSL Primitive Coverage
@@ -48,8 +52,8 @@ solver enumerator can rely on the extended registry without regressions.
 
 ## Getting Started
 
-1. Create a Python environment (e.g., `python -m venv .venv && source .venv/bin/activate`).
-2. Install core dependencies (placeholder): `pip install -r requirements.txt`.
+1. Create a Python environment with uv: `uv venv --python 3.11 .venv && source .venv/bin/activate`.
+2. Install dependencies via uv: `uv pip install --python .venv/bin/python -r requirements.txt` (use `requirements-rl.txt` for RL/Ray runs; LeJEPA code is vendored locally, no extra pip package needed).
 3. Generate synthetic datasets (pick a recipe below) and start pretraining.
 
 ### Dataset recipes
@@ -217,6 +221,8 @@ training:
 
 `train_jepa.py` logs `val/loss` to TensorBoard when enabled, includes validation curves in `metrics.json`, and stops once the patience budget is exhausted. Early stopping requires a validation split.
 
+**SIGReg + embedding diagnostics:** set `sigreg.weight>0` to enable the LeJEPA isotropic Gaussian penalty (implementation vendored under `lejepa/`). Toggle `diagnostics.embedding_metrics.enabled=true` to log isotropy, codebook usage, and rank stats during training. Both options are available in JEPA configs and are exercised in `scripts/run_jepa_ablation.py`.
+
 ### JEPA loss ↔ solver success correlation
 
 Use `scripts/validate_jepa_correlation.py` to quantify how predictive the JEPA validation
@@ -251,6 +257,17 @@ projection head capacity, etc.).
 Each run emits a JSON summary (see `artifacts/eval/jepa_correlation_demo.json` for a
 sample) that records checkpoint paths, validation loss, solver success rate, average
 programs evaluated, and the overall correlation statistic.
+
+### Active Reasoner workflow
+
+Quick path to the RL-driven hypothesis search stack:
+
+1. Generate program triples from a synthetic manifest: `python scripts/prepare_program_triples.py --manifest data/pilot_curriculum/manifest.jsonl --output data/program_triples.jsonl`.
+2. Train the program-conditioned JEPA on those triples: `python scripts/train_program_conditioned_jepa.py --config configs/training/jepa_program_conditioned.yaml` (set `sigreg.weight` if you want LeJEPA regularization here too).
+3. (Optional) Bootstrap RL with behavioral cloning traces: `python scripts/pretrain_bc.py --config configs/training/rl/active_reasoner_bc.yaml`.
+4. Train the Active Reasoner policy in `HypothesisSearchEnv`: `python scripts/train_active_reasoner.py --config configs/training/rl/active_reasoner.yaml`.
+
+`HypothesisSearchEnv` consumes JEPA latents and program traces instead of raw grids, so the triple dataset and program-conditioned JEPA are required inputs. Reward shaping and curriculum are configured inside the RL YAML (see `HypothesisRewardConfig` keys in `training/reasoner/hypothesis_env.py`).
 
 ### Meta-JEPA rule-family encoder
 
@@ -318,7 +335,7 @@ The sample config wires RLlib into `ArcLatentOptionEnv`, loads JEPA encoder sett
 - Python deps are tracked via `requirements*.txt` files in the repo root. Use `uv venv --python 3.11 .venv` followed by `uv pip install --python .venv/bin/python -r requirements.txt`.
 - Install optional extras as needed:
   - `requirements-dev.txt` for test tooling (`pytest`).
-  - `requirements-rl.txt` for RLlib-based PPO/A2C training.
+  - `requirements-rl.txt` for RLlib-based PPO/A2C training. LeJEPA utilities are vendored under the `lejepa/` directory (no separate pip install required).
 - `scipy>=1.11` is included in `requirements.txt` to power the vectorized object
   tokenization path; when it's missing the code falls back to the legacy Python
   implementation.

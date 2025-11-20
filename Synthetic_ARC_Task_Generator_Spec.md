@@ -114,6 +114,27 @@ Each generated task stored as JSON:
   }
 }
 
+### Program triple export (for counterfactual JEPA + Active Reasoner)
+
+Emit an auxiliary JSONL where each record captures (input, program, output) triples with tokenized program metadata:
+
+```json
+{
+  "input": [[0,1,1],[2,0,1],[0,0,2]],
+  "output": [[1,1,1],[2,0,1],[1,1,2]],
+  "program": {
+    "primitives": ["mirror_x", "recolor"],
+    "params": [{}, {"from": 2, "to": 1}],
+    "ids": [5, 17],            // integer IDs aligned to the primitive vocab
+    "param_vectors": [[0,0,..],[2,1,..]], // fixed-width parameter embeddings
+    "mask": [1,1]              // 0/1 padding mask for variable length
+  },
+  "context_window": 3          // ensure at least k=3 frames per ADR-0002/JEPA loader
+}
+```
+
+The JEPA `ManifestTokenizedPairDataset` expects `context_window>=3`; generator traces should provide at least that many sequential frames when available so multi-step contexts can be sliced without re-tokenizing. Program IDs/parameter vectors are consumed by `ProgramTripleDataset` and the Active Reasoner's `HypothesisSearchEnv`.
+
 
 ⸻
 
@@ -184,4 +205,3 @@ Latent Skill Discovery	Cluster JEPA latent deltas to auto-spawn new primitives.
 Curriculum Auto-tuning	Adaptive sampling based on JEPA loss or HRL success rate.
 ARC-2 Analog Tasks	Blend human and synthetic rules to simulate unseen reasoning types.
 Meta-JEPA World Model	Predict next task embeddings; generate imagined ARC tasks.
-

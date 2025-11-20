@@ -7,7 +7,7 @@ well‑tested, and aligned with the Beads workflow described in `Agents.md`.
 - Use `uv` for Python envs: `uv venv --python 3.11 .venv && source .venv/bin/activate`.
 - Install runtime deps: `uv pip install --python .venv/bin/python -r requirements.txt`.
 - Install dev/test extras when running tests: `uv pip install --python .venv/bin/python -r requirements-dev.txt`.
-- RL work: `uv pip install --python .venv/bin/python -r requirements-rl.txt`.
+- RL work (Ray, Active Reasoner, SIGReg): `uv pip install --python .venv/bin/python -r requirements-rl.txt`. LeJEPA utilities are vendored under `lejepa/` (no external pip install required).
 
 ## Testing
 - Run the full suite before pushing: `PYTHONPATH=. .venv/bin/pytest`.
