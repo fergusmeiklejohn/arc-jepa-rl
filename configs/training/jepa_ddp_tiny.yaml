@@ -1,0 +1,52 @@
+# Tiny JEPA config modified for DDP smoke tests (use torchrun -n 2 --local_rank).
+seed: 7
+dataset_manifest: data/tiny_manifest.jsonl
+
+data:
+  context_window: 3
+  target_offset: 1
+  shuffle: false
+
+tokenizer:
+  max_objects: 4
+  max_color_features: 2
+  background: 0
+  connectivity: 4
+  normalize: true
+  respect_colors: true
+
+object_encoder:
+  hidden_dim: 32
+  num_embeddings: 64
+  commitment_cost: 0.25
+  ema_decay: 0.99
+  activation: "gelu"
+  relational: false
+
+optimizer:
+  name: "adam"
+  lr: 1.0e-3
+  weight_decay: 0.0
+
+training:
+  batch_size: 2
+  epochs: 1
+  checkpoint_dir: artifacts/jepa/ddp_tiny
+  device: cpu
+  mixed_precision: "none"
+  grad_accum_steps: 1
+
+logging:
+  enabled: false
+
+loss:
+  objective: "infonce"
+  temperature: 0.1
+  learnable_temperature: true
+  queue_size: 32
+  projection_dim: 16
+  projection_layers: 1
+  projection_activation: "relu"
+
+sigreg:
+  weight: 0.0

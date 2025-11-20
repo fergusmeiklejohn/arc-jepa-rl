@@ -22,11 +22,12 @@ and evaluate out-of-distribution reasoning.
   evaluation runs.
 - `scripts/` — Command-line entry points for dataset generation and training.
   - `generate_dataset.py` — Build synthetic manifests; supports curriculum schedules and `allowed_primitives` constraints.
-  - `train_jepa.py` — Run manifest-backed JEPA pretraining (supports `--dry-run` and `--device`).
+  - `train_jepa.py` — Run manifest-backed JEPA pretraining (supports `--dry-run`, `--device`, and `--ddp`).
   - `train_meta_jepa.py` — Train the rule-family encoder on JSONL tasks with contrastive loss.
   - `train_guidance.py` — Fit the DSL neural guidance scorer on synthetic tasks using a JEPA encoder for latent features.
   - `train_hierarchical.py` — Launch RLlib PPO over the latent option environment using configs under `configs/training/rl/`.
   - `evaluate_arc.py` — Run the evaluation/ablation suite and emit JSON metrics.
+  - `run_jepa_ablation.py` — LeJEPA ablations (InfoNCE vs +VQ/relational/invariance/SIGReg) with JSON/Markdown summaries.
 - `tests/` — Unit and integration tests covering generators, models, and envs.
 
 ### DSL Primitive Coverage
@@ -120,6 +121,19 @@ Current baseline (DSL enumerator, max_nodes=3, no meta priors available for ARC-
 are provided to derive primitive histograms.
 
 The JSON summary for reproducibility lives at `artifacts/eval/arc_dev_baseline.json`.
+
+### Distributed JEPA pretraining (DDP)
+
+Use `torchrun` to launch multi-process JEPA training on a single node. Example tiny run:
+
+```bash
+PYTHONPATH=. torchrun --standalone --nproc_per_node=2 \
+  .venv/bin/python scripts/train_jepa.py \
+    --config configs/training/jepa_ddp_tiny.yaml \
+    --ddp --ddp-backend gloo
+```
+
+Use `nccl` backend on CUDA machines; set `--device cuda` or rely on `LOCAL_RANK` device assignment. The script skips checkpoint/logging on non-rank-0 workers.
 
 ## Contributing
 

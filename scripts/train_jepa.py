@@ -17,8 +17,10 @@ from arcgen import Grid
 
 try:  # pragma: no cover - handled by ObjectCentricJEPAExperiment
     import torch
+    import torch.distributed as dist
 except Exception:  # pragma: no cover
     torch = None  # type: ignore
+    dist = None  # type: ignore
 
 from training.jepa import ObjectCentricJEPAExperiment, load_jepa_config
 from scripts._jepa_loader import build_jepa_dataloader
@@ -46,6 +48,29 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Override mixed precision mode (default: use config)",
     )
+    parser.add_argument(
+        "--ddp",
+        action="store_true",
+        help="Enable torch.distributed DistributedDataParallel (single-node).",
+    )
+    parser.add_argument(
+        "--ddp-backend",
+        type=str,
+        default="nccl",
+        help="DDP backend (nccl/gloo).",
+    )
+    parser.add_argument(
+        "--ddp-world-size",
+        type=int,
+        default=None,
+        help="World size override; defaults to env WORLD_SIZE when using torchrun.",
+    )
+    parser.add_argument(
+        "--ddp-rank",
+        type=int,
+        default=None,
+        help="Global rank override; defaults to env RANK when using torchrun.",
+    )
     return parser.parse_args()
 
 
@@ -60,6 +85,22 @@ def main() -> None:
     if args.mixed_precision is not None:
         training_cfg["mixed_precision"] = args.mixed_precision
     device = args.device or training_cfg.get("device") or "cpu"
+    ddp_enabled = bool(args.ddp)
+
+    if ddp_enabled:
+        if torch is None or dist is None:
+            raise RuntimeError("PyTorch is required for DDP training")
+        if not dist.is_available():
+            raise RuntimeError("torch.distributed is not available")
+        backend = args.ddp_backend
+        dist.init_process_group(
+            backend=backend,
+            world_size=args.ddp_world_size or None,
+            rank=args.ddp_rank or None,
+        )
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        device = f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu"
+
     experiment = ObjectCentricJEPAExperiment(config, device=device)
 
     if args.dry_run:
@@ -67,6 +108,8 @@ def main() -> None:
         context_sequence = tuple(grid for _ in range(experiment.context_length))
         result = experiment.train_step([context_sequence], [grid])
         print(f"Dry-run loss: {result.loss:.6f}")
+        if ddp_enabled:
+            dist.destroy_process_group()
         return
 
     if torch is None:
@@ -161,7 +204,8 @@ def main() -> None:
         for epoch in range(1, epochs + 1):
             epoch_loss = experiment.train_epoch(train_loader)
             losses.append(epoch_loss)
-            print(f"Epoch {epoch}/{epochs}: loss={epoch_loss:.6f}")
+            if not ddp_enabled or dist.get_rank() == 0:
+                print(f"Epoch {epoch}/{epochs}: loss={epoch_loss:.6f}")
 
             if logger is not None:
                 logger.log_scalar("train/loss", epoch_loss, step=epoch)
@@ -171,15 +215,17 @@ def main() -> None:
             if val_loader is not None:
                 val_loss = experiment.evaluate_epoch(val_loader)
                 val_losses.append(val_loss)
-                print(f"  Validation loss: {val_loss:.6f}")
+                if not ddp_enabled or dist.get_rank() == 0:
+                    print(f"  Validation loss: {val_loss:.6f}")
                 if logger is not None:
                     logger.log_scalar("val/loss", val_loss, step=epoch)
                 if early_stopper.update(val_loss, step=epoch):
                     stop_training = True
-                    print(
-                        "  Early stopping triggered: "
-                        f"best_val={early_stopper.best_metric:.6f} at epoch {early_stopper.best_step}",
-                    )
+                    if not ddp_enabled or dist.get_rank() == 0:
+                        print(
+                            "  Early stopping triggered: "
+                            f"best_val={early_stopper.best_metric:.6f} at epoch {early_stopper.best_step}",
+                        )
 
             loss_events = experiment.consume_loss_metrics()
             if logger is not None:
@@ -198,19 +244,20 @@ def main() -> None:
             events = experiment.consume_embedding_metrics()
             _handle_embedding_events(events)
 
-            checkpoint_path = checkpoint_dir / f"checkpoint_epoch_{epoch:04d}.pt"
-            torch.save(
-                {
-                    "epoch": epoch,
-                    "config": config,
-                    "model_state": experiment.trainer.encoder.state_dict(),
-                    "projection_state": experiment.projection_head.state_dict(),
-                    "optimizer_state": experiment.optimizer.state_dict(),
-                    "queue_state": experiment.queue.state_dict(),
-                    "device": device,
-                },
-                checkpoint_path,
-            )
+            if not ddp_enabled or dist.get_rank() == 0:
+                checkpoint_path = checkpoint_dir / f"checkpoint_epoch_{epoch:04d}.pt"
+                torch.save(
+                    {
+                        "epoch": epoch,
+                        "config": config,
+                        "model_state": experiment.trainer.encoder.state_dict(),
+                        "projection_state": experiment.projection_head.state_dict(),
+                        "optimizer_state": experiment.optimizer.state_dict(),
+                        "queue_state": experiment.queue.state_dict(),
+                        "device": device,
+                    },
+                    checkpoint_path,
+                )
             completed_epochs = epoch
             if stop_training:
                 break
@@ -218,6 +265,9 @@ def main() -> None:
         final_events = experiment.consume_embedding_metrics(flush=True)
         _handle_embedding_events(final_events)
     finally:
+        if ddp_enabled and dist.is_initialized():
+            dist.barrier()
+            dist.destroy_process_group()
         if embedding_metrics_handle is not None:
             embedding_metrics_handle.close()
         if logger is not None:
