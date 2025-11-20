@@ -208,6 +208,7 @@ class GuidedBeamSearch:
         meta_prior: "MetaJEPAPrior | None" = None,
         meta_weight: float = 0.2,
         constraint_checker: "ConstraintChecker | None" = None,
+        parallel: bool = True,
     ) -> None:
         self.registry = registry
         self.scorer = scorer
@@ -219,6 +220,7 @@ class GuidedBeamSearch:
         self.meta_prior = meta_prior
         self.meta_weight = float(meta_weight)
         self.constraint_checker = constraint_checker
+        self.parallel = parallel
 
     def search(
         self,
@@ -296,19 +298,27 @@ class GuidedBeamSearch:
         if not batch_features:
             return []
 
-        features_tensor = torch.cat(batch_features, dim=0)
-        neural_scores = self.scorer(features_tensor)
-        if neural_scores.dim() == 0 or neural_scores.numel() == 1:
-            neural_scores = neural_scores.reshape(-1).repeat(len(candidate_meta))
+        neural_scores: torch.Tensor
+        if self.parallel:
+            features_tensor = torch.cat(batch_features, dim=0)
+            neural_scores = self.scorer(features_tensor).view(-1)
+            if neural_scores.numel() < len(candidate_meta):
+                pad_value = neural_scores[-1] if neural_scores.numel() > 0 else torch.tensor(0.0, device=device)
+                pad = pad_value.expand(len(candidate_meta) - neural_scores.numel())
+                neural_scores = torch.cat([neural_scores, pad], dim=0)
         else:
-            neural_scores = neural_scores.view(-1)
-        if neural_scores.numel() < len(candidate_meta):
-            pad_value = neural_scores[-1] if neural_scores.numel() > 0 else torch.tensor(0.0, device=device)
-            pad = pad_value.expand(len(candidate_meta) - neural_scores.numel())
-            neural_scores = torch.cat([neural_scores, pad], dim=0)
+            score_list = []
+            for feats in batch_features:
+                score = self.scorer(feats).view(-1)
+                score_list.append(score[0] if score.numel() else torch.tensor(0.0, device=device))
+            neural_scores = torch.stack(score_list, dim=0) if score_list else torch.zeros(0, device=device)
 
         for idx, (program, length, output_grid) in enumerate(candidate_meta):
-            neural_score = float(neural_scores[idx].item())
+            if neural_scores.numel() == 0:
+                neural_score = 0.0
+            else:
+                # Clamp index to last available score if scorer returned fewer entries.
+                neural_score = float(neural_scores[min(idx, neural_scores.numel() - 1)].item())
             meta_bonus = 0.0
             if self.meta_prior is not None:
                 meta_bonus = self.meta_weight * self.meta_prior.score_program(program, input_grid, output_grid)

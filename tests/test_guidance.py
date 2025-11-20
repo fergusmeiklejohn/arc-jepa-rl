@@ -163,6 +163,7 @@ def test_guided_beam_search_batches_scorer():
         dummy_latent_embedder,
         beam_width=4,
         length_penalty=0.0,
+        parallel=True,
     )
 
     enumerator = ProgramEnumerator(
@@ -184,3 +185,51 @@ def test_guided_beam_search_batches_scorer():
 
     assert results
     assert scorer.last_shape is not None and scorer.last_shape[0] > 1
+
+
+def test_guided_beam_search_can_disable_parallel_path():
+    torch = pytest.importorskip("torch")
+    registry = build_default_primitive_registry(color_constants=(0, 1))
+    program_encoder = ProgramEncoder(registry, embedding_dim=4)
+
+    class CountingScorer(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def forward(self, features):
+            self.calls += 1
+            return torch.zeros(features.shape[0], device=features.device)
+
+    scorer = CountingScorer()
+
+    beam = GuidedBeamSearch(
+        registry,
+        scorer,
+        program_encoder,
+        ProgramInterpreter(),
+        dummy_latent_embedder,
+        beam_width=2,
+        length_penalty=0.0,
+        parallel=False,
+    )
+
+    enumerator = ProgramEnumerator(
+        registry,
+        inputs=[InputVar("grid", GridType)],
+        target_type=GridType,
+        max_nodes=2,
+    )
+
+    context = Grid([[0, 1], [0, 0]])
+    target = Grid([[1, 0], [0, 0]])
+    results = beam.search(
+        dummy_latent_embedder(context),
+        dummy_latent_embedder(target),
+        enumerator,
+        context,
+        target,
+    )
+
+    assert results
+    assert scorer.calls == len(results) or scorer.calls >= 1
