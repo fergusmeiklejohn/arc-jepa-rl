@@ -121,6 +121,11 @@ are provided to derive primitive histograms.
 
 The JSON summary for reproducibility lives at `artifacts/eval/arc_dev_baseline.json`.
 
+## Contributing
+
+See `CONTRIBUTING.md` for environment setup (uv), testing expectations, Beads workflow,
+and doc/style guidelines.
+
 ### Pre-tokenized JEPA manifests
 
 Long JEPA runs avoid Python tokenization overhead by precomputing object tokens
