@@ -242,6 +242,9 @@ class GuidedBeamSearch:
         error_marker = getattr(cache, "ERROR", None) if cache is not None else None
         checker = constraint_checker or self.constraint_checker
 
+        batch_features: List[torch.Tensor] = []
+        candidate_meta: List[Tuple[Program, float, Grid]] = []
+
         for program in candidates:
             if checker is not None and checker.pre_check(program, input_grid, target_grid):
                 continue
@@ -287,7 +290,25 @@ class GuidedBeamSearch:
                     torch.tensor([length], dtype=torch.float32, device=device),
                 ]
             )
-            neural_score = float(self.scorer(features.unsqueeze(0)).item())
+            batch_features.append(features.unsqueeze(0))
+            candidate_meta.append((program, float(length), output_grid))
+
+        if not batch_features:
+            return []
+
+        features_tensor = torch.cat(batch_features, dim=0)
+        neural_scores = self.scorer(features_tensor)
+        if neural_scores.dim() == 0 or neural_scores.numel() == 1:
+            neural_scores = neural_scores.reshape(-1).repeat(len(candidate_meta))
+        else:
+            neural_scores = neural_scores.view(-1)
+        if neural_scores.numel() < len(candidate_meta):
+            pad_value = neural_scores[-1] if neural_scores.numel() > 0 else torch.tensor(0.0, device=device)
+            pad = pad_value.expand(len(candidate_meta) - neural_scores.numel())
+            neural_scores = torch.cat([neural_scores, pad], dim=0)
+
+        for idx, (program, length, output_grid) in enumerate(candidate_meta):
+            neural_score = float(neural_scores[idx].item())
             meta_bonus = 0.0
             if self.meta_prior is not None:
                 meta_bonus = self.meta_weight * self.meta_prior.score_program(program, input_grid, output_grid)
