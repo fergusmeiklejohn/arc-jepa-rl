@@ -553,7 +553,8 @@ class ObjectCentricJEPAExperiment:
                     self._update_target_network()
                 if pending_queue:
                     self._enqueue_targets(pending_queue)
-                    pending_queue.clear()
+            # Drop any staged queue entries when a step is skipped to avoid GPU accumulation.
+            pending_queue.clear()
             self.optimizer.zero_grad(set_to_none=True)
             accumulated_microbatches = 0
 
