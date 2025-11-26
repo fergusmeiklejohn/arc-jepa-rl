@@ -37,7 +37,7 @@ optimizer:
   weight_decay: 1.0e-6
 
 training:
-  batch_size: 1024
+  batch_size: 256
   num_workers: 8
   grad_accum_steps: 2
   epochs: 30
