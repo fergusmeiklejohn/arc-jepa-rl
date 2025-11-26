@@ -7,11 +7,16 @@ import json
 import math
 from pathlib import Path
 import sys
+import os
 from typing import Mapping
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+_DEFAULT_ALLOC_CONF = "expandable_segments:True,max_split_size_mb:128"
+if "PYTORCH_CUDA_ALLOC_CONF" not in os.environ:
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = _DEFAULT_ALLOC_CONF
 
 from arcgen import Grid
 
