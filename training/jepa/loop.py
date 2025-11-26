@@ -697,10 +697,11 @@ class ObjectCentricJEPAExperiment:
                 self._amp_enabled = False
                 self._amp_dtype = None
                 return
-            if scaler_cls is _amp_grad_scaler:
-                # torch.amp GradScaler is the modern API that takes device_type
+            try:
+                # Prefer the modern torch.amp signature when supported
                 self._grad_scaler = scaler_cls(device_type=self.device.type)
-            else:
+            except TypeError:
+                # Fallback for torch.cuda.amp.GradScaler without device_type kwarg
                 self._grad_scaler = scaler_cls()
         else:
             self._grad_scaler = None
