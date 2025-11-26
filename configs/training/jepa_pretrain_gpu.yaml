@@ -99,3 +99,6 @@ diagnostics:
     enabled: true
     interval: 200
     max_samples: 4096
+
+pre_tokenized:
+  path: artifacts/tokenized/pilot_curriculum
