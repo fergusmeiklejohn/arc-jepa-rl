@@ -163,7 +163,17 @@ class EmbeddingDiagnosticsTracker:
             raise ValueError("embeddings must be 2D for diagnostics")
         variance = torch.var(embeddings, dim=0, unbiased=False).mean()
         cov = self._covariance(embeddings)
-        eigenvalues = torch.linalg.eigvalsh(cov)
+        # Ensure numerical stability: add a tiny jitter if covariance is ill-conditioned
+        jitter = torch.eye(cov.size(0), device=cov.device, dtype=cov.dtype) * 1e-6
+        try:
+            eigenvalues = torch.linalg.eigvalsh(cov + jitter)
+        except torch.linalg.LinAlgError:
+            return {
+                "variance": float(variance.item()),
+                "isotropy": 0.0,
+                "effective_rank": 0.0,
+                "gaussian_score": 0.0,
+            }
         eigenvalues = torch.clamp(eigenvalues.real, min=0.0)
         max_eig = torch.max(eigenvalues).clamp(min=1e-8)
         min_eig = torch.min(eigenvalues).clamp(min=0.0)

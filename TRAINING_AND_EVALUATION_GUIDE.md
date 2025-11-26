@@ -305,11 +305,17 @@ cat data/pilot_curriculum/summary.json | jq '{total_tasks, phases, program_lengt
 
 #### Step 2: (Optional) Pre-tokenize for Speed
 
+
+Generate the pilot curriculum dataset first:
 ```bash
-PYTHONPATH=. .venv/bin/python scripts/pretokenize_jepa.py \
-  --config configs/training/jepa_pretrain_gpu.yaml \
-  --output artifacts/tokenized/pilot_curriculum
+python scripts/generate_dataset.py --config configs/data/pilot_curriculum.yaml
 ```
+This writes data/pilot_curriculum/manifest.jsonl and summary.json.
+Then rerun pretokenization:
+```bash
+python scripts/pretokenize_jepa.py --config configs/training/jepa_pretrain_gpu.yaml --output artifacts/tokenized/pilot_curriculum
+```
+
 
 **Benefits:**
 - 30-40% faster training (especially for large grids)
