@@ -526,40 +526,58 @@ class ObjectCentricJEPAExperiment:
     ) -> float:
         total_loss = 0.0
         batches = 0
-        pending_losses: list[torch.Tensor] = []
         pending_queue: list[torch.Tensor] = []
+        accumulated_microbatches = 0
 
         self._ensure_scheduler(dataset)
 
-        def _apply_pending() -> None:
-            if not pending_losses:
-                return
-            self.optimizer.zero_grad(set_to_none=True)
-            combined = torch.stack(pending_losses).mean()
-            self._step_optimizer(combined)
+        def _optimizer_step() -> None:
+            nonlocal accumulated_microbatches
+            optimizer_stepped = False
+            if self._grad_scaler is not None:
+                self._clip_gradients()
+                step_result = self._grad_scaler.step(self.optimizer)
+                optimizer_stepped = True if step_result is None else bool(step_result)
+                self._grad_scaler.update()
+            else:
+                self._clip_gradients()
+                self.optimizer.step()
+                optimizer_stepped = True
+
+            if optimizer_stepped and self._lr_scheduler is not None:
+                self._lr_scheduler.step()
             if self._use_target_encoder:
                 self._update_target_network()
             if pending_queue:
                 self._enqueue_targets(pending_queue)
-            pending_losses.clear()
-            pending_queue.clear()
+                pending_queue.clear()
+            self.optimizer.zero_grad(set_to_none=True)
+            accumulated_microbatches = 0
 
+        # Ensure gradients start cleared before accumulation.
+        self.optimizer.zero_grad(set_to_none=True)
         for batch in dataset:
             loss_tensor, target_proj, _ = self._forward_batch_loss(batch)
 
             total_loss += float(loss_tensor.detach().float().cpu().item())
-            pending_losses.append(loss_tensor)
             pending_queue.append(self._prepare_queue_projection(target_proj))
             batches += 1
+            accumulated_microbatches += 1
 
-            if len(pending_losses) == self.grad_accum_steps:
-                _apply_pending()
+            scaled_loss = loss_tensor / float(self.grad_accum_steps)
+            if self._grad_scaler is not None:
+                self._grad_scaler.scale(scaled_loss).backward()
+            else:
+                scaled_loss.backward()
+
+            if accumulated_microbatches == self.grad_accum_steps:
+                _optimizer_step()
 
         if batches == 0:
             raise ValueError("dataset yielded no batches")
 
-        if pending_losses:
-            _apply_pending()
+        if accumulated_microbatches > 0:
+            _optimizer_step()
 
         return total_loss / batches
 
@@ -737,7 +755,8 @@ class ObjectCentricJEPAExperiment:
             self._grad_scaler.scale(loss).backward()
             self._clip_gradients()
             step_result = self._grad_scaler.step(self.optimizer)
-            optimizer_stepped = step_result is not None
+            # torch.cuda.amp.GradScaler.step returns None even when the step runs; treat None as success.
+            optimizer_stepped = True if step_result is None else bool(step_result)
             self._grad_scaler.update()
         else:
             loss.backward()
