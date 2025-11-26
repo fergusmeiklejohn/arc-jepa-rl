@@ -38,6 +38,13 @@ except Exception:  # pragma: no cover
     torch = None  # type: ignore
 
 if torch is not None:  # pragma: no branch
+    try:  # pragma: no cover - prefer torch.amp when available
+        _torch_amp = getattr(torch, "amp", None)
+        _amp_autocast = getattr(_torch_amp, "autocast", None)
+        _amp_grad_scaler = getattr(_torch_amp, "GradScaler", None)
+    except Exception:  # pragma: no cover
+        _amp_autocast = None  # type: ignore
+        _amp_grad_scaler = None  # type: ignore
     try:  # pragma: no cover - CUDA optional on CI
         from torch.cuda.amp import GradScaler
         from torch.cuda.amp import autocast as cuda_autocast
@@ -45,6 +52,8 @@ if torch is not None:  # pragma: no branch
         GradScaler = None  # type: ignore
         cuda_autocast = None  # type: ignore
 else:  # pragma: no cover
+    _amp_autocast = None  # type: ignore
+    _amp_grad_scaler = None  # type: ignore
     GradScaler = None  # type: ignore
     cuda_autocast = None  # type: ignore
 
@@ -678,7 +687,8 @@ class ObjectCentricJEPAExperiment:
         self._amp_enabled = True
         self._amp_dtype = dtype
         if mp.use_grad_scaler:
-            if GradScaler is None:
+            scaler_cls = _amp_grad_scaler or GradScaler
+            if scaler_cls is None:
                 warnings.warn(
                     "GradScaler unavailable; disabling FP16 mixed precision",
                     RuntimeWarning,
@@ -687,14 +697,22 @@ class ObjectCentricJEPAExperiment:
                 self._amp_enabled = False
                 self._amp_dtype = None
                 return
-            self._grad_scaler = GradScaler()
+            if scaler_cls is _amp_grad_scaler:
+                # torch.amp GradScaler is the modern API that takes device_type
+                self._grad_scaler = scaler_cls(device_type=self.device.type)
+            else:
+                self._grad_scaler = scaler_cls()
         else:
             self._grad_scaler = None
 
     def _autocast_context(self):
-        if not self._amp_enabled or cuda_autocast is None or self._amp_dtype is None:
+        if not self._amp_enabled or self._amp_dtype is None:
             return nullcontext()
-        return cuda_autocast(dtype=self._amp_dtype)
+        if _amp_autocast is not None:
+            return _amp_autocast(self.device.type, dtype=self._amp_dtype)
+        if cuda_autocast is not None:
+            return cuda_autocast(dtype=self._amp_dtype)
+        return nullcontext()
 
     def _clip_gradients(self) -> None:
         if torch is None:  # pragma: no cover - defensive
@@ -713,16 +731,19 @@ class ObjectCentricJEPAExperiment:
         )
 
     def _step_optimizer(self, loss: torch.Tensor) -> None:
+        optimizer_stepped = False
         if self._grad_scaler is not None:
             self._grad_scaler.scale(loss).backward()
             self._clip_gradients()
-            self._grad_scaler.step(self.optimizer)
+            step_result = self._grad_scaler.step(self.optimizer)
+            optimizer_stepped = step_result is not None
             self._grad_scaler.update()
         else:
             loss.backward()
             self._clip_gradients()
             self.optimizer.step()
-        if self._lr_scheduler is not None:
+            optimizer_stepped = True
+        if optimizer_stepped and self._lr_scheduler is not None:
             self._lr_scheduler.step()
 
     def set_planned_epochs(self, epochs: int) -> None:
