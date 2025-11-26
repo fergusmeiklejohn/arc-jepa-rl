@@ -563,6 +563,19 @@ class ObjectCentricJEPAExperiment:
         for batch in dataset:
             loss_tensor, target_proj, _ = self._forward_batch_loss(batch)
 
+            if not torch.isfinite(loss_tensor):
+                warnings.warn(
+                    "Non-finite loss encountered; skipping microbatch and resetting gradients",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                if self._grad_scaler is not None:
+                    self._grad_scaler.update()
+                self.optimizer.zero_grad(set_to_none=True)
+                pending_queue.clear()
+                accumulated_microbatches = 0
+                continue
+
             total_loss += float(loss_tensor.detach().float().cpu().item())
             pending_queue.append(self._prepare_queue_projection(target_proj))
             batches += 1
@@ -582,6 +595,9 @@ class ObjectCentricJEPAExperiment:
 
         if accumulated_microbatches > 0:
             _optimizer_step()
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         return total_loss / batches
 
