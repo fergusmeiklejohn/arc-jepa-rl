@@ -536,21 +536,24 @@ class ObjectCentricJEPAExperiment:
             optimizer_stepped = False
             if self._grad_scaler is not None:
                 self._clip_gradients()
-                step_result = self._grad_scaler.step(self.optimizer)
-                optimizer_stepped = True if step_result is None else bool(step_result)
+                prev_step = getattr(self.optimizer, "_step_count", 0)
+                self._grad_scaler.step(self.optimizer)
+                new_step = getattr(self.optimizer, "_step_count", prev_step)
+                optimizer_stepped = new_step != prev_step
                 self._grad_scaler.update()
             else:
                 self._clip_gradients()
                 self.optimizer.step()
                 optimizer_stepped = True
 
-            if optimizer_stepped and self._lr_scheduler is not None:
-                self._lr_scheduler.step()
-            if self._use_target_encoder:
-                self._update_target_network()
-            if pending_queue:
-                self._enqueue_targets(pending_queue)
-                pending_queue.clear()
+            if optimizer_stepped:
+                if self._lr_scheduler is not None:
+                    self._lr_scheduler.step()
+                if self._use_target_encoder:
+                    self._update_target_network()
+                if pending_queue:
+                    self._enqueue_targets(pending_queue)
+                    pending_queue.clear()
             self.optimizer.zero_grad(set_to_none=True)
             accumulated_microbatches = 0
 
@@ -754,9 +757,10 @@ class ObjectCentricJEPAExperiment:
         if self._grad_scaler is not None:
             self._grad_scaler.scale(loss).backward()
             self._clip_gradients()
-            step_result = self._grad_scaler.step(self.optimizer)
-            # torch.cuda.amp.GradScaler.step returns None even when the step runs; treat None as success.
-            optimizer_stepped = True if step_result is None else bool(step_result)
+            prev_step = getattr(self.optimizer, "_step_count", 0)
+            self._grad_scaler.step(self.optimizer)
+            new_step = getattr(self.optimizer, "_step_count", prev_step)
+            optimizer_stepped = new_step != prev_step
             self._grad_scaler.update()
         else:
             loss.backward()
