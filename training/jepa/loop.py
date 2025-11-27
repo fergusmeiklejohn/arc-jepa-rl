@@ -6,7 +6,9 @@ import copy
 import math
 from contextlib import nullcontext
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable, Mapping, Sequence
+import os
 import warnings
 
 from arcgen import Grid
@@ -270,6 +272,15 @@ class ObjectCentricJEPAExperiment:
         self._loss_events: list[dict[str, object]] = []
         self._loss_step = 0
         self._metrics_enabled = True
+        # Optional CUDA memory history (heavyweight) controlled via env vars.
+        self._memory_history_enabled = bool(os.environ.get("JEPA_MEMORY_HISTORY"))
+        self._memory_history_dir = Path(os.environ.get("JEPA_MEMORY_HISTORY_DIR", "artifacts/jepa/memory"))
+        if self._memory_history_enabled and torch is not None and torch.cuda.is_available() and self.device.type == "cuda":
+            try:
+                torch.cuda.memory._record_memory_history(enabled=True)
+                self._memory_history_dir.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                self._memory_history_enabled = False
 
     def _masked_mean(self, embeddings: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         mask = mask.unsqueeze(-1)
@@ -528,6 +539,7 @@ class ObjectCentricJEPAExperiment:
         batches = 0
         pending_queue: list[torch.Tensor] = []
         accumulated_microbatches = 0
+        optimizer_steps = 0
 
         self._ensure_scheduler(dataset)
         mem_log_interval = 200 if torch.cuda.is_available() and self.device.type == "cuda" else 0
@@ -560,6 +572,7 @@ class ObjectCentricJEPAExperiment:
                     self._update_target_network()
                 if pending_queue:
                     self._enqueue_targets(pending_queue)
+                optimizer_steps += 1
             # Drop any staged queue entries when a step is skipped to avoid GPU accumulation.
             pending_queue.clear()
             self.optimizer.zero_grad(set_to_none=True)
@@ -603,6 +616,9 @@ class ObjectCentricJEPAExperiment:
                             f"queue_fill={int(self.queue.filled.item()) if hasattr(self.queue, 'filled') else 0}"
                         )
                         print(torch.cuda.memory_summary(self.device, abbreviated=True))
+                        if self._memory_history_enabled:
+                            snapshot_path = self._memory_history_dir / f"cuda_snapshot_oom_step_{self._loss_step:06d}.json"
+                            torch.cuda.memory._dump_snapshot(str(snapshot_path))
                     except Exception:
                         pass
                 raise
@@ -625,10 +641,16 @@ class ObjectCentricJEPAExperiment:
 
         if mem_log_interval:
             self._log_cuda_memory(
-                "epoch_end",
+                f"epoch_end_steps={optimizer_steps}",
                 pending_queue_len=len(pending_queue),
                 accumulated_microbatches=accumulated_microbatches,
             )
+            if self._memory_history_enabled and torch.cuda.is_available():
+                try:
+                    snapshot_path = self._memory_history_dir / f"cuda_snapshot_epoch_{self._loss_step:06d}.json"
+                    torch.cuda.memory._dump_snapshot(str(snapshot_path))
+                except Exception:
+                    pass
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
