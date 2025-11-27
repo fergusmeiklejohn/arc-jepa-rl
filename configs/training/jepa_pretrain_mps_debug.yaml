@@ -1,0 +1,104 @@
+# JEPA debug configuration for CPU/MPS sanity checks (small batch/queue).
+seed: 123
+dataset_manifest: data/pilot_curriculum/manifest.jsonl
+
+data:
+  context_window: 3
+  target_offset: 1
+  shuffle: true
+
+tokenizer:
+  max_objects: 16
+  max_color_features: 10
+  background: 0
+  connectivity: 4
+  normalize: true
+  respect_colors: true
+
+object_encoder:
+  hidden_dim: 256
+  num_embeddings: 512
+  commitment_cost: 0.25
+  ema_decay: 0.99
+  vq_refresh_enabled: true
+  vq_refresh_interval: 100
+  vq_refresh_usage_threshold: 0.01
+  activation: "gelu"
+
+model:
+  type: "conv"
+  embedding_dim: 512
+  projection_dim: 256
+  projection_layers: 2
+
+optimizer:
+  name: "adam"
+  lr: 5.0e-5
+  weight_decay: 1.0e-6
+
+training:
+  batch_size: 16
+  num_workers: 0
+  grad_accum_steps: 1
+  epochs: 2
+  checkpoint_dir: artifacts/jepa/pretrain_mps_debug
+  device: mps
+  drop_last: true
+  mixed_precision: "none"
+  pin_memory: false
+  grad_clip:
+    max_norm: 1.0
+    norm_type: 2.0
+  lr_scheduler:
+    name: "cosine"
+    warmup_steps: 50
+    min_lr_scale: 0.05
+
+augmentations:
+  mask_ratio: 0.1
+  random_crop_radius: 1
+  palette_permutation: true
+  gaussian_noise_std: 0.05
+  min_grid_size_for_crop: 8
+
+loss:
+  objective: "infonce"
+  temperature: 0.07
+  temperature_min: 0.05
+  temperature_max: 0.2
+  learnable_temperature: true
+  queue_size: 1024
+  projection_dim: 256
+  projection_layers: 2
+  projection_activation: "relu"
+
+sigreg:
+  weight: 0.0
+  num_slices: 1024
+  num_points: 17
+
+invariance:
+  color_weight: 0.1
+  translation_weight: 0.05
+  translation_max_delta: 0.05
+  symmetry_weight: 0.05
+  symmetry_modes: ["horizontal", "vertical"]
+
+relational_loss:
+  weight: 0.05
+  context_self_weight: 0.02
+
+logging:
+  enabled: true
+  log_dir: artifacts/jepa/pretrain_mps_debug/tensorboard
+  flush_secs: 10
+  run_name: jepa_mps_debug
+
+diagnostics:
+  embedding_metrics:
+    enabled: true
+    interval: 100
+    max_samples: 2048
+
+pre_tokenized:
+  path: artifacts/tokenized/pilot_curriculum

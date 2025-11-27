@@ -530,6 +530,13 @@ class ObjectCentricJEPAExperiment:
         accumulated_microbatches = 0
 
         self._ensure_scheduler(dataset)
+        mem_log_interval = 200 if torch.cuda.is_available() and self.device.type == "cuda" else 0
+        if mem_log_interval:
+            try:
+                torch.cuda.reset_peak_memory_stats(self.device)
+            except Exception:
+                mem_log_interval = 0
+            self._log_cuda_memory("epoch_start", pending_queue_len=len(pending_queue), accumulated_microbatches=accumulated_microbatches)
 
         def _optimizer_step() -> None:
             nonlocal accumulated_microbatches
@@ -582,10 +589,30 @@ class ObjectCentricJEPAExperiment:
             accumulated_microbatches += 1
 
             scaled_loss = loss_tensor / float(self.grad_accum_steps)
-            if self._grad_scaler is not None:
-                self._grad_scaler.scale(scaled_loss).backward()
-            else:
-                scaled_loss.backward()
+            try:
+                if self._grad_scaler is not None:
+                    self._grad_scaler.scale(scaled_loss).backward()
+                else:
+                    scaled_loss.backward()
+            except torch.cuda.OutOfMemoryError:
+                if torch.cuda.is_available():
+                    try:
+                        torch.cuda.synchronize(self.device)
+                        print(
+                            f"[oom] during backward: batch={batches} acc={accumulated_microbatches} "
+                            f"queue_fill={int(self.queue.filled.item()) if hasattr(self.queue, 'filled') else 0}"
+                        )
+                        print(torch.cuda.memory_summary(self.device, abbreviated=True))
+                    except Exception:
+                        pass
+                raise
+
+            if mem_log_interval and batches % mem_log_interval == 0:
+                self._log_cuda_memory(
+                    f"step_{batches}",
+                    pending_queue_len=len(pending_queue),
+                    accumulated_microbatches=accumulated_microbatches,
+                )
 
             if accumulated_microbatches == self.grad_accum_steps:
                 _optimizer_step()
@@ -596,6 +623,12 @@ class ObjectCentricJEPAExperiment:
         if accumulated_microbatches > 0:
             _optimizer_step()
 
+        if mem_log_interval:
+            self._log_cuda_memory(
+                "epoch_end",
+                pending_queue_len=len(pending_queue),
+                accumulated_microbatches=accumulated_microbatches,
+            )
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
@@ -847,6 +880,35 @@ class ObjectCentricJEPAExperiment:
 
     def _tensor_to_cpu(self, tensor: torch.Tensor) -> torch.Tensor:
         return tensor.detach().float().cpu()
+
+    def _log_cuda_memory(
+        self,
+        tag: str,
+        *,
+        pending_queue_len: int = 0,
+        accumulated_microbatches: int = 0,
+    ) -> None:
+        """Print a compact CUDA memory snapshot to help diagnose leaks/fragmentation."""
+        if torch is None:
+            return
+        if not torch.cuda.is_available():
+            return
+        if self.device.type != "cuda":
+            return
+        try:
+            torch.cuda.synchronize(self.device)
+            allocated = torch.cuda.memory_allocated(self.device) / 2**20
+            reserved = torch.cuda.memory_reserved(self.device) / 2**20
+            max_allocated = torch.cuda.max_memory_allocated(self.device) / 2**20
+            queue_fill = int(self.queue.filled.item()) if hasattr(self.queue, "filled") else 0
+            print(
+                f"[mem][{tag}] alloc={allocated:.1f}MB reserved={reserved:.1f}MB "
+                f"max_alloc={max_allocated:.1f}MB pending={pending_queue_len} "
+                f"acc={accumulated_microbatches} queue_fill={queue_fill}"
+            )
+        except Exception:
+            # Best-effort diagnostics; do not crash training on logging failure.
+            return
 
     def _token_invariance_loss(
         self,

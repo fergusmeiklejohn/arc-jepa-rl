@@ -336,10 +336,7 @@ pre_tokenized:
 tmux new -s jepa_pretrain
 
 # Run training
-PYTHONPATH=. .venv/bin/python scripts/train_jepa.py \
-  --config configs/training/jepa_pretrain_gpu.yaml \
-  --device cuda \
-  --mixed-precision fp16
+python scripts/train_jepa.py --config configs/training/jepa_pretrain_gpu.yaml --device cuda --mixed-precision fp16
 ```
 
 **Monitor progress:**
