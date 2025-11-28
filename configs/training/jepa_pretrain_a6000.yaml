@@ -46,9 +46,9 @@ optimizer:
 
 training:
   batch_size: 512           # micro-batch
-  grad_accum_steps: 4       # effective batch ≈ 2048
+  grad_accum_steps: 2       # effective batch ≈ 1024, more optimizer steps
   num_workers: 8
-  epochs: 120               # target ~50k optimizer steps with this dataset
+  epochs: 180               # target ~7-8k optimizer steps with this dataset
   checkpoint_dir: artifacts/jepa/pretrain_a6000
   checkpoint_interval: 10   # save every 10 epochs; latest is always saved
   device: cuda
@@ -60,9 +60,9 @@ training:
     norm_type: 2.0
   lr_scheduler:
     name: "cosine"
-    warmup_steps: 2000
+    warmup_steps: 500
     min_lr_scale: 0.1
-    total_steps: 50000
+    total_steps: 6000
 
 augmentations:
   mask_ratio: 0.1
