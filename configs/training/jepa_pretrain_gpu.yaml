@@ -20,7 +20,7 @@ object_encoder:
   num_embeddings: 512
   commitment_cost: 0.25
   ema_decay: 0.99
-  vq_enabled: false
+  vq_enabled: true
   vq_refresh_enabled: true
   vq_refresh_interval: 100
   vq_refresh_usage_threshold: 0.01
