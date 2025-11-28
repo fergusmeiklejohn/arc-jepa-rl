@@ -551,7 +551,7 @@ class ObjectCentricJEPAExperiment:
             self._log_cuda_memory("epoch_start", pending_queue_len=len(pending_queue), accumulated_microbatches=accumulated_microbatches)
 
         def _optimizer_step() -> None:
-            nonlocal accumulated_microbatches
+            nonlocal accumulated_microbatches, optimizer_steps
             optimizer_stepped = False
             if self._grad_scaler is not None:
                 self._clip_gradients()
