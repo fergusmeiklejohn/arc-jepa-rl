@@ -41,6 +41,30 @@ This guide provides comprehensive, step-by-step instructions for training and ev
      --device cuda
    ```
 
+### Long A6000 run (≈50k optimizer steps)
+
+1. **Generate larger curriculum data (50k tasks):**
+   ```bash
+   PYTHONPATH=. .venv/bin/python scripts/generate_dataset.py \
+     --config configs/data/pilot_curriculum_large.yaml
+   ```
+
+2. **Pretokenize once to remove dataloader CPU bottlenecks:**
+   ```bash
+   PYTHONPATH=. .venv/bin/python scripts/pretokenize_jepa.py \
+     --config configs/training/jepa_pretrain_a6000.yaml \
+     --manifest data/pilot_curriculum_large/manifest.jsonl \
+     --output artifacts/tokenized/pilot_curriculum_large \
+     --shard-size 2048
+   ```
+
+3. **Run the long JEPA config tuned for A6000:**
+   ```bash
+   PYTHONPATH=. .venv/bin/python scripts/train_jepa.py \
+     --config configs/training/jepa_pretrain_a6000.yaml \
+     --device cuda
+   ```
+
 ---
 
 ## Hardware Setup & Optimization
@@ -53,13 +77,14 @@ The repository includes GPU-optimized configurations designed for 40-80GB VRAM G
 
 **A6000 (48GB VRAM):**
 ```yaml
-# configs/training/jepa_pretrain_gpu.yaml
+# configs/training/jepa_pretrain_a6000.yaml
 training:
-  batch_size: 1024          # Effective batch with grad accumulation
-  grad_accum_steps: 2       # ~512 per micro-batch
-  num_workers: 8            # DataLoader processes
-  mixed_precision: "fp16"   # ~40% memory savings
+  batch_size: 512           # Effective batch ≈ 2048 with grad accumulation
+  grad_accum_steps: 4       # 4 × 512 micro-batches per optimizer step
+  num_workers: 12           # Keeps GPU fed on A6000 host CPU
+  mixed_precision: "bf16"   # Stable on Ampere while saving VRAM
   pin_memory: true          # Faster CPU→GPU transfer
+  drop_last: true
 ```
 
 **A100 (80GB VRAM):**
@@ -93,14 +118,15 @@ training:
    ```bash
    # Pre-compute object tokens once (saves 30-40% training time)
    PYTHONPATH=. .venv/bin/python scripts/pretokenize_jepa.py \
-     --config configs/training/jepa_pretrain_gpu.yaml \
-     --output artifacts/tokenized/pilot_curriculum
+     --config configs/training/jepa_pretrain_a6000.yaml \
+     --manifest data/pilot_curriculum_large/manifest.jsonl \
+     --output artifacts/tokenized/pilot_curriculum_large
    ```
 
    Then update config:
    ```yaml
    pre_tokenized:
-     path: artifacts/tokenized/pilot_curriculum
+     path: artifacts/tokenized/pilot_curriculum_large
    ```
 
 #### Monitoring GPU Utilization
@@ -108,7 +134,7 @@ training:
 ```bash
 # Terminal 1: Training
 PYTHONPATH=. .venv/bin/python scripts/train_jepa.py \
-  --config configs/training/jepa_pretrain_gpu.yaml \
+  --config configs/training/jepa_pretrain_a6000.yaml \
   --device cuda
 
 # Terminal 2: Monitor GPU
@@ -131,7 +157,7 @@ If GPU util <70%, increase `num_workers` or reduce `grad_accum_steps`.
 **Automatic Saving:**
 - Checkpoints saved every epoch: `checkpoint_dir/checkpoint_epoch_XXXX.pt`
 - Contains: model state, optimizer state, queue state, epoch number, config
-- Location: `training.checkpoint_dir` in config (default: `artifacts/jepa/pretrain_gpu/`)
+- Location: `training.checkpoint_dir` in config (default: `artifacts/jepa/pretrain_a6000/`)
 
 **What's Saved:**
 ```python
@@ -146,82 +172,23 @@ If GPU util <70%, increase `num_workers` or reduce `grad_accum_steps`.
 ```
 
 ### Resuming Training After Auto-Shutdown
+`scripts/train_jepa.py` now supports `--resume <checkpoint.pt>` and restores the
+model/optimizer/queue state directly:
 
-**⚠️ Current Limitation:** The `train_jepa.py` script does not include a `--resume` flag yet.
-
-#### Option 1: Manual Resume (Python Script)
-
-Create a resume script `scripts/resume_jepa.py`:
-
-```python
-"""Resume JEPA training from checkpoint."""
-import torch
-from pathlib import Path
-import sys
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-
-from training.jepa import ObjectCentricJEPAExperiment, load_jepa_config
-
-# Load checkpoint
-checkpoint_path = Path("artifacts/jepa/pretrain_gpu/checkpoint_epoch_0015.pt")
-checkpoint = torch.load(checkpoint_path)
-
-# Restore config and create experiment
-config = checkpoint["config"]
-device = checkpoint.get("device", "cuda")
-experiment = ObjectCentricJEPAExperiment(config, device=device)
-
-# Load model/optimizer state
-experiment.trainer.encoder.load_state_dict(checkpoint["model_state"])
-experiment.projection_head.load_state_dict(checkpoint["projection_state"])
-experiment.optimizer.load_state_dict(checkpoint["optimizer_state"])
-experiment.queue.load_state_dict(checkpoint["queue_state"])
-
-start_epoch = checkpoint["epoch"] + 1
-print(f"Resumed from epoch {checkpoint['epoch']}, starting epoch {start_epoch}")
-
-# Continue training loop...
-# (Copy training loop from train_jepa.py, adjust epoch range)
-```
-
-#### Option 2: Planned Enhancement (Recommended Path)
-
-Add resume capability to `train_jepa.py`:
-
-```python
-# Add to parse_args():
-parser.add_argument(
-    "--resume",
-    type=Path,
-    default=None,
-    help="Path to checkpoint to resume from"
-)
-
-# In main(), after creating experiment:
-if args.resume:
-    checkpoint = torch.load(args.resume)
-    experiment.trainer.encoder.load_state_dict(checkpoint["model_state"])
-    experiment.projection_head.load_state_dict(checkpoint["projection_state"])
-    experiment.optimizer.load_state_dict(checkpoint["optimizer_state"])
-    experiment.queue.load_state_dict(checkpoint["queue_state"])
-    start_epoch = checkpoint["epoch"] + 1
-else:
-    start_epoch = 1
-
-# Modify training loop:
-for epoch in range(start_epoch, epochs + 1):
-    # ... existing training code
-```
-
-**Usage after enhancement:**
 ```bash
 PYTHONPATH=. .venv/bin/python scripts/train_jepa.py \
-  --config configs/training/jepa_pretrain_gpu.yaml \
+  --config configs/training/jepa_pretrain_a6000.yaml \
   --device cuda \
-  --resume artifacts/jepa/pretrain_gpu/checkpoint_epoch_0015.pt
+  --resume artifacts/jepa/pretrain_a6000/checkpoint_epoch_0040.pt
 ```
+
+Notes:
+- The config is reloaded from the checkpoint to avoid drift; command-line
+  overrides (e.g., `--device`) still apply.
+- EMA targets are rebuilt from the loaded online weights; LR scheduler state is
+  derived from the optimizer step count so the cosine schedule keeps moving.
+- If the resume checkpoint is already past the configured `training.epochs`, the
+  run will no-op after emitting metrics.
 
 ### Auto-Shutdown Best Practices
 
@@ -232,7 +199,7 @@ PYTHONPATH=. .venv/bin/python scripts/train_jepa.py \
 
    # Run training
    PYTHONPATH=. .venv/bin/python scripts/train_jepa.py \
-     --config configs/training/jepa_pretrain_gpu.yaml \
+     --config configs/training/jepa_pretrain_a6000.yaml \
      --device cuda
 
    # Detach: Ctrl+B, then D
@@ -243,7 +210,7 @@ PYTHONPATH=. .venv/bin/python scripts/train_jepa.py \
    ```yaml
    logging:
      enabled: true
-     log_dir: artifacts/jepa/pretrain_gpu/tensorboard
+     log_dir: artifacts/jepa/pretrain_a6000/tensorboard
      flush_secs: 10  # Flush frequently for shutdown safety
    ```
 
@@ -251,18 +218,18 @@ PYTHONPATH=. .venv/bin/python scripts/train_jepa.py \
    ```bash
    # Terminal 1: Training in tmux
    # Terminal 2: TensorBoard
-   .venv/bin/tensorboard --logdir artifacts/jepa/pretrain_gpu/tensorboard --port 6006
+   .venv/bin/tensorboard --logdir artifacts/jepa/pretrain_a6000/tensorboard --port 6006
    ```
 
 4. **Checkpoint inspection:**
    ```bash
    # Find latest checkpoint
-   ls -lt artifacts/jepa/pretrain_gpu/checkpoint_epoch_*.pt | head -1
+   ls -lt artifacts/jepa/pretrain_a6000/checkpoint_epoch_*.pt | head -1
 
    # Check epoch number
    PYTHONPATH=. .venv/bin/python -c "
    import torch
-   ckpt = torch.load('artifacts/jepa/pretrain_gpu/checkpoint_epoch_0015.pt')
+   ckpt = torch.load('artifacts/jepa/pretrain_a6000/checkpoint_epoch_0040.pt')
    print(f'Epoch: {ckpt[\"epoch\"]}, Device: {ckpt[\"device\"]}')
    "
    ```
@@ -270,7 +237,7 @@ PYTHONPATH=. .venv/bin/python scripts/train_jepa.py \
 5. **Backup critical checkpoints:**
    ```bash
    # Periodic backup (add to cron or systemd timer)
-   rsync -av artifacts/jepa/pretrain_gpu/ /backup/jepa_$(date +%Y%m%d)/
+   rsync -av artifacts/jepa/pretrain_a6000/ /backup/jepa_$(date +%Y%m%d)/
    ```
 
 ---
@@ -281,39 +248,36 @@ PYTHONPATH=. .venv/bin/python scripts/train_jepa.py \
 
 **Goal:** Train object-centric JEPA encoder on synthetic ARC tasks.
 
-**Estimated time:** 6-12 hours (30 epochs, 10K tasks, A6000)
+**Estimated time:** 8-12 hours on A6000 for ~50k optimizer steps (pretokenized, bf16)
 
 #### Step 1: Generate Dataset
 
 ```bash
 PYTHONPATH=. .venv/bin/python scripts/generate_dataset.py \
-  --config configs/data/pilot_curriculum.yaml
+  --config configs/data/pilot_curriculum_large.yaml
 ```
 
 **Output:**
-- `data/pilot_curriculum/manifest.jsonl` (10,000 task pairs)
-- `data/pilot_curriculum/summary.json` (dataset statistics)
+- `data/pilot_curriculum_large/manifest.jsonl` (~50,000 task pairs)
+- `data/pilot_curriculum_large/summary.json` (dataset statistics)
 
 **Verify dataset:**
 ```bash
 # Check task count
-wc -l data/pilot_curriculum/manifest.jsonl
+wc -l data/pilot_curriculum_large/manifest.jsonl
 
 # Inspect summary
-cat data/pilot_curriculum/summary.json | jq '{total_tasks, phases, program_length_histogram}'
+cat data/pilot_curriculum_large/summary.json | jq '{total_tasks, phases, program_length_histogram}'
 ```
 
 #### Step 2: (Optional) Pre-tokenize for Speed
 
-
-Generate the pilot curriculum dataset first:
 ```bash
-python scripts/generate_dataset.py --config configs/data/pilot_curriculum.yaml
-```
-This writes data/pilot_curriculum/manifest.jsonl and summary.json.
-Then rerun pretokenization:
-```bash
-python scripts/pretokenize_jepa.py --config configs/training/jepa_pretrain_gpu.yaml --output artifacts/tokenized/pilot_curriculum
+PYTHONPATH=. .venv/bin/python scripts/pretokenize_jepa.py \
+  --config configs/training/jepa_pretrain_a6000.yaml \
+  --manifest data/pilot_curriculum_large/manifest.jsonl \
+  --output artifacts/tokenized/pilot_curriculum_large \
+  --shard-size 2048
 ```
 
 
@@ -324,9 +288,9 @@ python scripts/pretokenize_jepa.py --config configs/training/jepa_pretrain_gpu.y
 
 **Update config to use pre-tokenized data:**
 ```yaml
-# configs/training/jepa_pretrain_gpu.yaml
+# configs/training/jepa_pretrain_a6000.yaml
 pre_tokenized:
-  path: artifacts/tokenized/pilot_curriculum
+  path: artifacts/tokenized/pilot_curriculum_large
 ```
 
 #### Step 3: Launch Training
@@ -336,7 +300,9 @@ pre_tokenized:
 tmux new -s jepa_pretrain
 
 # Run training
-python scripts/train_jepa.py --config configs/training/jepa_pretrain_gpu.yaml --device cuda --mixed-precision fp16
+PYTHONPATH=. .venv/bin/python scripts/train_jepa.py \
+  --config configs/training/jepa_pretrain_a6000.yaml \
+  --device cuda
 ```
 
 
@@ -345,16 +311,16 @@ python scripts/train_jepa.py --config configs/training/jepa_pretrain_gpu.yaml --
 ```bash
 # Watch console output
 # Expected output:
-# Epoch 1/30: loss=2.456789
+# Epoch 1/120: loss=2.456789
 #   Validation loss: 2.123456
-# Epoch 2/30: loss=2.012345
+# Epoch 2/120: loss=2.012345
 #   Validation loss: 1.987654
 # ...
 ```
 
 **TensorBoard (separate terminal):**
 ```bash
-.venv/bin/tensorboard --logdir artifacts/jepa/pretrain_gpu/tensorboard
+.venv/bin/tensorboard --logdir artifacts/jepa/pretrain_a6000/tensorboard
 # Open http://localhost:6006
 ```
 
@@ -362,7 +328,7 @@ python scripts/train_jepa.py --config configs/training/jepa_pretrain_gpu.yaml --
 
 **Check metrics.json:**
 ```bash
-cat artifacts/jepa/pretrain_gpu/metrics.json | jq '{
+cat artifacts/jepa/pretrain_a6000/metrics.json | jq '{
   completed_epochs,
   batch_size,
   final_loss: .losses[-1],
@@ -373,13 +339,13 @@ cat artifacts/jepa/pretrain_gpu/metrics.json | jq '{
 
 **Inspect checkpoint:**
 ```bash
-ls -lh artifacts/jepa/pretrain_gpu/checkpoint_epoch_*.pt
+ls -lh artifacts/jepa/pretrain_a6000/checkpoint_epoch_*.pt
 # Should see files ~50-200MB depending on model size
 ```
 
 **Visualize embedding quality:**
 ```bash
-cat artifacts/jepa/pretrain_gpu/embedding_metrics.jsonl | tail -5 | jq
+cat artifacts/jepa/pretrain_a6000/embedding_metrics.jsonl | tail -5 | jq
 ```
 
 ### Workflow 2: JEPA with LeJEPA Regularization (SIGReg)
@@ -391,7 +357,7 @@ cat artifacts/jepa/pretrain_gpu/embedding_metrics.jsonl | tail -5 | jq
 #### Configuration
 
 ```yaml
-# configs/training/jepa_sigreg.yaml (create from jepa_pretrain_gpu.yaml)
+# configs/training/jepa_sigreg.yaml (create from jepa_pretrain_a6000.yaml)
 sigreg:
   weight: 0.1        # Start conservative (0.05-0.2 range)
   num_slices: 1024   # Higher = more accurate, slower
@@ -432,7 +398,7 @@ PYTHONPATH=. .venv/bin/python scripts/train_jepa.py \
 
 ```bash
 PYTHONPATH=. .venv/bin/python scripts/run_jepa_ablation.py \
-  --tasks data/pilot_curriculum/manifest.jsonl \
+  --tasks data/pilot_curriculum_large/manifest.jsonl \
   --output artifacts/ablation/jepa_variants.json \
   --device cuda
 ```
@@ -455,13 +421,13 @@ PYTHONPATH=. .venv/bin/python scripts/run_jepa_ablation.py \
 
 | Hyperparameter | Default | A6000 Recommended | Tuning Notes |
 |----------------|---------|-------------------|--------------|
-| `batch_size` | 1024 | 1024-2048 | Larger = more stable but slower per-epoch |
-| `grad_accum_steps` | 2 | 2-4 | Increase if OOM, maintain effective batch |
-| `lr` | 5e-5 | 3e-5 to 1e-4 | Too high → collapse, too low → slow |
-| `warmup_steps` | 1000 | 500-2000 | ~10% of total steps |
-| `queue_size` | 4096 | 4096-8192 | Larger = better negatives, more memory |
+| `batch_size` | 512 | 512-1024 (micro) | Effective batch scales with `grad_accum_steps` |
+| `grad_accum_steps` | 4 | 2-4 | Maintain ≥2k effective batch; drop if latency-bound |
+| `lr` | 3e-4 | 1e-4 to 3e-4 | Increase cautiously with larger batches |
+| `warmup_steps` | 2000 | 1500-2500 | ~3-5% of total planned steps |
+| `queue_size` | 8192 | 4096-8192 | Larger = better negatives, more memory |
 | `temperature` | 0.07 | 0.05-0.1 | Lower = harder negatives |
-| `mixed_precision` | fp16 | fp16/bf16 | bf16 if A100 (better stability) |
+| `mixed_precision` | bf16 | bf16 (fp16 if bf16 unstable) | bf16 stable on A6000/A100 |
 
 **Tuning procedure:**
 
@@ -469,7 +435,7 @@ PYTHONPATH=. .venv/bin/python scripts/run_jepa_ablation.py \
    ```bash
    # Quick test with default config
    PYTHONPATH=. .venv/bin/python scripts/train_jepa.py \
-     --config configs/training/jepa_pretrain_gpu.yaml \
+     --config configs/training/jepa_pretrain_a6000.yaml \
      --device cuda
    ```
    Monitor: Loss should decrease steadily, GPU util >85%
@@ -508,9 +474,9 @@ PYTHONPATH=. .venv/bin/python scripts/run_jepa_ablation.py \
 
 ```bash
 PYTHONPATH=. .venv/bin/python scripts/evaluate_arc.py \
-  --tasks data/pilot_curriculum/manifest.jsonl \
+  --tasks data/pilot_curriculum_large/manifest.jsonl \
   --output artifacts/eval/pilot_curriculum.json \
-  --latent-config configs/training/jepa_pretrain_gpu.yaml \
+  --latent-config configs/training/jepa_pretrain_a6000.yaml \
   --latent-device cuda \
   --max-nodes 3
 ```
@@ -560,7 +526,7 @@ git clone --depth 1 https://github.com/fchollet/ARC external/ARC
 PYTHONPATH=. .venv/bin/python scripts/evaluate_arc.py \
   --arc-dev-root external/ARC/data/training \
   --output artifacts/eval/arc_dev.json \
-  --latent-config configs/training/jepa_pretrain_gpu.yaml \
+  --latent-config configs/training/jepa_pretrain_a6000.yaml \
   --latent-device cuda \
   --max-nodes 3
 ```
@@ -573,9 +539,9 @@ PYTHONPATH=. .venv/bin/python scripts/evaluate_arc.py \
 
 ```bash
 PYTHONPATH=. .venv/bin/python scripts/validate_jepa_correlation.py \
-  --jepa-config configs/training/jepa_pretrain_gpu.yaml \
-  --checkpoints artifacts/jepa/pretrain_gpu/checkpoint_epoch_0030.pt \
-  --tasks data/pilot_curriculum/manifest.jsonl \
+  --jepa-config configs/training/jepa_pretrain_a6000.yaml \
+  --checkpoints artifacts/jepa/pretrain_a6000/checkpoint_epoch_0030.pt \
+  --tasks data/pilot_curriculum_large/manifest.jsonl \
   --device cuda \
   --output artifacts/eval/jepa_correlation.json
 ```
@@ -633,7 +599,7 @@ PYTHONPATH=. .venv/bin/python scripts/validate_jepa_correlation.py \
 **Check diagnostics:**
 ```bash
 # Last 10 diagnostic events
-tail -10 artifacts/jepa/pretrain_gpu/embedding_metrics.jsonl | jq '.context.isotropy'
+tail -10 artifacts/jepa/pretrain_a6000/embedding_metrics.jsonl | jq '.context.isotropy'
 ```
 
 ### Common Evaluation Patterns
@@ -864,7 +830,7 @@ program:
 2. **Train JEPA on full curriculum:**
    ```bash
    PYTHONPATH=. .venv/bin/python scripts/train_jepa.py \
-     --config configs/training/jepa_pretrain_gpu.yaml \
+     --config configs/training/jepa_pretrain_a6000.yaml \
      --device cuda
    ```
    The mixed curriculum acts as implicit curriculum learning.
@@ -916,7 +882,7 @@ PYTHONPATH=. .venv/bin/python scripts/generate_dataset.py \
 PYTHONPATH=. .venv/bin/python scripts/evaluate_arc.py \
   --tasks data/pilot_ood/manifest.jsonl \
   --output artifacts/eval/ood.json \
-  --latent-config configs/training/jepa_pretrain_gpu.yaml \
+  --latent-config configs/training/jepa_pretrain_a6000.yaml \
   --latent-device cuda
 ```
 
@@ -1151,7 +1117,7 @@ RuntimeError: CUDA out of memory. Tried to allocate X MiB (GPU 0; 47.54 GiB tota
    ```
 
 2. **Checkpoint every epoch (default):**
-   - Already enabled, checkpoints in `artifacts/jepa/pretrain_gpu/`
+   - Already enabled, checkpoints in `artifacts/jepa/pretrain_a6000/`
 
 3. **Add manual checkpoint hook (if needed):**
    ```python
@@ -1178,7 +1144,7 @@ OSError: [Errno 28] No space left on device
 1. **Clean old checkpoints:**
    ```bash
    # Keep only last 5 epochs
-   cd artifacts/jepa/pretrain_gpu
+   cd artifacts/jepa/pretrain_a6000
    ls -t checkpoint_epoch_*.pt | tail -n +6 | xargs rm
    ```
 
@@ -1191,7 +1157,7 @@ OSError: [Errno 28] No space left on device
 3. **Use compression for tokenized datasets:**
    ```bash
    # Compress shards (50-70% savings)
-   gzip artifacts/tokenized/pilot_curriculum/*.pt
+   gzip artifacts/tokenized/pilot_curriculum_large/*.pt
    ```
 
 ---
@@ -1203,16 +1169,16 @@ OSError: [Errno 28] No space left on device
 ```bash
 # Generate dataset
 PYTHONPATH=. .venv/bin/python scripts/generate_dataset.py \
-  --config configs/data/pilot_curriculum.yaml
+  --config configs/data/pilot_curriculum_large.yaml
 
 # Train JEPA (single GPU)
 PYTHONPATH=. .venv/bin/python scripts/train_jepa.py \
-  --config configs/training/jepa_pretrain_gpu.yaml \
+  --config configs/training/jepa_pretrain_a6000.yaml \
   --device cuda
 
 # Evaluate synthetic
 PYTHONPATH=. .venv/bin/python scripts/evaluate_arc.py \
-  --tasks data/pilot_curriculum/manifest.jsonl \
+  --tasks data/pilot_curriculum_large/manifest.jsonl \
   --output artifacts/eval/result.json
 
 # Evaluate ARC-1 dev
@@ -1221,7 +1187,7 @@ PYTHONPATH=. .venv/bin/python scripts/evaluate_arc.py \
   --output artifacts/eval/arc_dev.json
 
 # TensorBoard
-.venv/bin/tensorboard --logdir artifacts/jepa/pretrain_gpu/tensorboard
+.venv/bin/tensorboard --logdir artifacts/jepa/pretrain_a6000/tensorboard
 
 # GPU monitoring
 watch -n 1 nvidia-smi
@@ -1231,10 +1197,10 @@ watch -n 1 nvidia-smi
 
 | Component | Path |
 |-----------|------|
-| JEPA checkpoints | `artifacts/jepa/pretrain_gpu/checkpoint_epoch_XXXX.pt` |
-| Training metrics | `artifacts/jepa/pretrain_gpu/metrics.json` |
-| TensorBoard logs | `artifacts/jepa/pretrain_gpu/tensorboard/` |
-| Embedding diagnostics | `artifacts/jepa/pretrain_gpu/embedding_metrics.jsonl` |
+| JEPA checkpoints | `artifacts/jepa/pretrain_a6000/checkpoint_epoch_XXXX.pt` |
+| Training metrics | `artifacts/jepa/pretrain_a6000/metrics.json` |
+| TensorBoard logs | `artifacts/jepa/pretrain_a6000/tensorboard/` |
+| Embedding diagnostics | `artifacts/jepa/pretrain_a6000/embedding_metrics.jsonl` |
 | Evaluation results | `artifacts/eval/*.json` |
 | Generated datasets | `data/*/manifest.jsonl` |
 | Tokenized datasets | `artifacts/tokenized/*/` |
@@ -1244,19 +1210,18 @@ watch -n 1 nvidia-smi
 | Use Case | Config File |
 |----------|-------------|
 | Quick test (CPU) | `configs/training/jepa_tiny.yaml` |
-| Full training (A6000) | `configs/training/jepa_pretrain_gpu.yaml` |
-| LeJEPA regularization | `configs/training/active_reasoner_sigreg.yaml` |
+| Full training (A6000) | `configs/training/jepa_pretrain_a6000.yaml` |
+| LeJEPA regularization | `configs/training/jepa_sigreg.yaml` |
 | Program-conditioned | `configs/training/jepa_program_conditioned.yaml` |
 | Active Reasoner | `configs/training/rl/active_reasoner.yaml` |
-| Curriculum data | `configs/data/pilot_curriculum.yaml` |
+| Curriculum data | `configs/data/pilot_curriculum_large.yaml` |
 | OOD data | `configs/data/pilot_ood.yaml` |
 
 ### Performance Benchmarks (A6000)
 
 | Task | Dataset Size | Epochs | Time | Peak VRAM |
 |------|--------------|--------|------|-----------|
-| JEPA pretrain | 10K tasks | 30 | 8 hours | 28GB |
-| JEPA pretrain | 50K tasks | 30 | 36 hours | 35GB |
+| JEPA pretrain | 50K tasks (pretokenized) | 120 | 8-12 hours | 30-36GB |
 | Program-conditioned | 10K triples | 20 | 6 hours | 22GB |
 | Active Reasoner | 5K tasks | 60 iters | 12 hours | 18GB |
 | Evaluation (synthetic) | 10K tasks | - | 2 hours | 8GB |

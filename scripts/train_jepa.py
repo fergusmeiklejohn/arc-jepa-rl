@@ -5,9 +5,10 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 from pathlib import Path
 import sys
-from typing import Mapping
+from typing import Mapping, Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -71,12 +72,29 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Global rank override; defaults to env RANK when using torchrun.",
     )
+    parser.add_argument(
+        "--resume",
+        type=Path,
+        default=None,
+        help="Path to a checkpoint to resume from (restores model/optimizer/queue state)",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     config = dict(load_jepa_config(args.config))
+
+    resume_state: Optional[dict] = None
+    resume_epoch = 0
+    if args.resume is not None:
+        if torch is None:
+            raise RuntimeError("PyTorch is required when resuming from a checkpoint")
+        checkpoint = torch.load(args.resume, map_location="cpu")
+        if isinstance(checkpoint.get("config"), Mapping):
+            config = dict(checkpoint["config"])
+        resume_state = checkpoint
+        resume_epoch = int(checkpoint.get("epoch", 0))
 
     training_cfg = config.get("training", {})
     if not isinstance(training_cfg, dict):
@@ -102,6 +120,19 @@ def main() -> None:
         device = f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu"
 
     experiment = ObjectCentricJEPAExperiment(config, device=device)
+
+    if resume_state is not None:
+        experiment.trainer.encoder.load_state_dict(resume_state["model_state"])
+        experiment.projection_head.load_state_dict(resume_state["projection_state"])
+        experiment.optimizer.load_state_dict(resume_state["optimizer_state"])
+        queue_state = resume_state.get("queue_state")
+        if queue_state is not None:
+            experiment.queue.load_state_dict(queue_state)
+        if experiment._use_target_encoder:
+            # Rebuild EMA targets to mirror the loaded online weights.
+            experiment._build_target_network()
+        if not ddp_enabled or dist.get_rank() == 0:
+            print(f"Resumed from checkpoint {args.resume} at epoch {resume_epoch}")
 
     if args.dry_run:
         grid = Grid([[0, 1], [0, 1]])
@@ -200,8 +231,9 @@ def main() -> None:
         embedding_metrics_handle.flush()
 
     try:
-        completed_epochs = 0
-        for epoch in range(1, epochs + 1):
+        completed_epochs = resume_epoch
+        start_epoch = min(resume_epoch + 1, epochs + 1)
+        for epoch in range(start_epoch, epochs + 1):
             epoch_loss = experiment.train_epoch(train_loader)
             losses.append(epoch_loss)
             if not ddp_enabled or dist.get_rank() == 0:
