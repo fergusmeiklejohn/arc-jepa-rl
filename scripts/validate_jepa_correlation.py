@@ -72,6 +72,7 @@ class LatentDistanceBeam:
         *,
         cache=None,
         mdl_weight: float = 0.0,
+        constraint_checker=None,
     ) -> List[Tuple[object, float]]:
         scored: List[Tuple[object, float]] = []
         error_marker = getattr(cache, "ERROR", None) if cache is not None else None

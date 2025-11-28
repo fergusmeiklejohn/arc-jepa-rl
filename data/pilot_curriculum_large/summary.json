@@ -1,0 +1,49 @@
+{
+  "num_tasks": 50000,
+  "phases": {
+    "atomic": 30000,
+    "sequential": 20000
+  },
+  "palette_size_counts": {
+    "4": 16675,
+    "6": 16653,
+    "5": 16672
+  },
+  "program_length": {
+    "min": 1.0,
+    "max": 3.0,
+    "mean": 1.59752,
+    "median": 1.0,
+    "p10": 1.0,
+    "p90": 3.0
+  },
+  "program_length_histogram": {
+    "1": 30000,
+    "2": 10124,
+    "3": 9876
+  },
+  "changed_cells": {
+    "min": 1.0,
+    "max": 196.0,
+    "mean": 61.72878,
+    "median": 60.0,
+    "p10": 10.0,
+    "p90": 113.0
+  },
+  "grid_height": {
+    "min": 6.0,
+    "max": 14.0,
+    "mean": 9.99098,
+    "median": 10.0,
+    "p10": 6.0,
+    "p90": 14.0
+  },
+  "grid_width": {
+    "min": 6.0,
+    "max": 14.0,
+    "mean": 9.99578,
+    "median": 10.0,
+    "p10": 6.0,
+    "p90": 14.0
+  }
+}
