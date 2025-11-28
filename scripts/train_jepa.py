@@ -158,6 +158,7 @@ def main() -> None:
 
     epochs = int(training_cfg.get("epochs", 1))
     experiment.set_planned_epochs(epochs)
+    checkpoint_interval = max(1, int(training_cfg.get("checkpoint_interval", 1)))
 
     total_steps = None
     try:
@@ -277,19 +278,18 @@ def main() -> None:
             _handle_embedding_events(events)
 
             if not ddp_enabled or dist.get_rank() == 0:
-                checkpoint_path = checkpoint_dir / f"checkpoint_epoch_{epoch:04d}.pt"
-                torch.save(
-                    {
-                        "epoch": epoch,
-                        "config": config,
-                        "model_state": experiment.trainer.encoder.state_dict(),
-                        "projection_state": experiment.projection_head.state_dict(),
-                        "optimizer_state": experiment.optimizer.state_dict(),
-                        "queue_state": experiment.queue.state_dict(),
-                        "device": device,
-                    },
-                    checkpoint_path,
-                )
+                payload = {
+                    "epoch": epoch,
+                    "config": config,
+                    "model_state": experiment.trainer.encoder.state_dict(),
+                    "projection_state": experiment.projection_head.state_dict(),
+                    "optimizer_state": experiment.optimizer.state_dict(),
+                    "queue_state": experiment.queue.state_dict(),
+                    "device": device,
+                }
+                if epoch % checkpoint_interval == 0 or epoch == epochs:
+                    torch.save(payload, checkpoint_dir / f"checkpoint_epoch_{epoch:04d}.pt")
+                torch.save(payload, checkpoint_dir / "checkpoint_latest.pt")
             completed_epochs = epoch
             if stop_training:
                 break

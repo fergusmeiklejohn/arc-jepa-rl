@@ -45,24 +45,17 @@ This guide provides comprehensive, step-by-step instructions for training and ev
 
 1. **Generate larger curriculum data (50k tasks):**
    ```bash
-   PYTHONPATH=. .venv/bin/python scripts/generate_dataset.py \
-     --config configs/data/pilot_curriculum_large.yaml
+   python scripts/generate_dataset.py --config configs/data/pilot_curriculum_large.yaml
    ```
 
 2. **Pretokenize once to remove dataloader CPU bottlenecks:**
    ```bash
-   PYTHONPATH=. .venv/bin/python scripts/pretokenize_jepa.py \
-     --config configs/training/jepa_pretrain_a6000.yaml \
-     --manifest data/pilot_curriculum_large/manifest.jsonl \
-     --output artifacts/tokenized/pilot_curriculum_large \
-     --shard-size 2048
+   python scripts/pretokenize_jepa.py --config configs/training/jepa_pretrain_a6000.yaml --manifest data/pilot_curriculum_large/manifest.jsonl --output artifacts/tokenized/pilot_curriculum_large --shard-size 2048
    ```
 
 3. **Run the long JEPA config tuned for A6000:**
    ```bash
-   PYTHONPATH=. .venv/bin/python scripts/train_jepa.py \
-     --config configs/training/jepa_pretrain_a6000.yaml \
-     --device cuda
+   python scripts/train_jepa.py --config configs/training/jepa_pretrain_a6000.yaml --device cuda
    ```
 
 ---
@@ -81,7 +74,7 @@ The repository includes GPU-optimized configurations designed for 40-80GB VRAM G
 training:
   batch_size: 512           # Effective batch ≈ 2048 with grad accumulation
   grad_accum_steps: 4       # 4 × 512 micro-batches per optimizer step
-  num_workers: 12           # Keeps GPU fed on A6000 host CPU
+  num_workers: 8            # Keeps GPU fed on A6000 host CPU
   mixed_precision: "bf16"   # Stable on Ampere while saving VRAM
   pin_memory: true          # Faster CPU→GPU transfer
   drop_last: true
@@ -340,7 +333,7 @@ cat artifacts/jepa/pretrain_a6000/metrics.json | jq '{
 **Inspect checkpoint:**
 ```bash
 ls -lh artifacts/jepa/pretrain_a6000/checkpoint_epoch_*.pt
-# Should see files ~50-200MB depending on model size
+# Saved every 10 epochs; latest always at checkpoint_latest.pt
 ```
 
 **Visualize embedding quality:**

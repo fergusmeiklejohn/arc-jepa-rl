@@ -47,9 +47,10 @@ optimizer:
 training:
   batch_size: 512           # micro-batch
   grad_accum_steps: 4       # effective batch ≈ 2048
-  num_workers: 12
+  num_workers: 8
   epochs: 120               # target ~50k optimizer steps with this dataset
   checkpoint_dir: artifacts/jepa/pretrain_a6000
+  checkpoint_interval: 10   # save every 10 epochs; latest is always saved
   device: cuda
   drop_last: true
   mixed_precision: "bf16"
