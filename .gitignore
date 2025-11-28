@@ -7,3 +7,6 @@ history/
 external/
 __pycache__/
 .hypothesis/
+temp/
+.venv_tmp/*
+.venv_tmp/lib/python3.12/site-packages/distutils-precedence.pth
