@@ -542,13 +542,27 @@ class ObjectCentricJEPAExperiment:
         optimizer_steps = 0
 
         self._ensure_scheduler(dataset)
-        mem_log_interval = 200 if torch.cuda.is_available() and self.device.type == "cuda" else 0
-        if mem_log_interval:
-            try:
-                torch.cuda.reset_peak_memory_stats(self.device)
-            except Exception:
-                mem_log_interval = 0
-            self._log_cuda_memory("epoch_start", pending_queue_len=len(pending_queue), accumulated_microbatches=accumulated_microbatches)
+        mem_log_interval = 0
+        if torch.cuda.is_available() and self.device.type == "cuda":
+            env_interval = os.environ.get("JEPA_MEM_LOG_INTERVAL")
+            env_flag = os.environ.get("JEPA_MEM_LOG")
+            if env_interval:
+                try:
+                    mem_log_interval = max(1, int(env_interval))
+                except ValueError:
+                    mem_log_interval = 0
+            elif env_flag:
+                mem_log_interval = 200
+            if mem_log_interval:
+                try:
+                    torch.cuda.reset_peak_memory_stats(self.device)
+                except Exception:
+                    mem_log_interval = 0
+                self._log_cuda_memory(
+                    "epoch_start",
+                    pending_queue_len=len(pending_queue),
+                    accumulated_microbatches=accumulated_microbatches,
+                )
 
         def _optimizer_step() -> None:
             nonlocal accumulated_microbatches, optimizer_steps
