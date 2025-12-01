@@ -21,12 +21,12 @@ tokenizer:
 object_encoder:
   hidden_dim: 384
   num_embeddings: 768
-  commitment_cost: 0.25
+  commitment_cost: 0.3
   ema_decay: 0.99
   vq_enabled: true
   vq_refresh_enabled: true
   vq_refresh_interval: 100
-  vq_refresh_usage_threshold: 0.01
+  vq_refresh_usage_threshold: 0.02
   activation: "gelu"
   relational: true
   relational_layers: 3
@@ -48,7 +48,7 @@ training:
   batch_size: 512           # micro-batch
   grad_accum_steps: 2       # effective batch ≈ 1024, more optimizer steps
   num_workers: 8
-  epochs: 150               # target ~6-7k optimizer steps with this dataset
+  epochs: 120               # stop earlier to reduce late-stage collapse
   checkpoint_dir: artifacts/jepa/pretrain_a6000
   checkpoint_interval: 10   # save every 10 epochs; latest is always saved
   device: cuda
@@ -63,6 +63,11 @@ training:
     warmup_steps: 400
     min_lr_scale: 0.1
     total_steps: 5000
+  early_stopping:
+    enabled: true
+    patience: 5
+    min_delta: 0.0
+    mode: min
 
 augmentations:
   mask_ratio: 0.1
@@ -82,7 +87,7 @@ loss:
   projection_layers: 2
   projection_activation: "relu"
   use_target_encoder: true
-  target_ema_decay: 0.995
+  target_ema_decay: 0.99
 
 sigreg:
   weight: 0.15
