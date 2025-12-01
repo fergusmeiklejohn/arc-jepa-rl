@@ -41,16 +41,16 @@ model:
 
 optimizer:
   name: "adam"
-  lr: 1.5e-4
+  lr: 1.0e-4
   weight_decay: 1.0e-6
 
 training:
   batch_size: 512           # micro-batch
   grad_accum_steps: 2       # effective batch ≈ 1024, more optimizer steps
   num_workers: 8
-  epochs: 120               # stop earlier to reduce late-stage collapse
+  epochs: 80                # shorter run to avoid late collapse
   checkpoint_dir: artifacts/jepa/pretrain_a6000
-  checkpoint_interval: 10   # save every 10 epochs; latest is always saved
+  checkpoint_interval: 5    # save every 5 epochs; latest is always saved
   device: cuda
   drop_last: true
   mixed_precision: "bf16"
@@ -60,12 +60,12 @@ training:
     norm_type: 2.0
   lr_scheduler:
     name: "cosine"
-    warmup_steps: 400
+    warmup_steps: 500
     min_lr_scale: 0.1
-    total_steps: 5000
+    total_steps: 4000
   early_stopping:
     enabled: true
-    patience: 5
+    patience: 10
     min_delta: 0.0
     mode: min
 
