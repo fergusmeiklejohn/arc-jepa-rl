@@ -272,6 +272,7 @@ class ObjectCentricJEPAExperiment:
         self._loss_events: list[dict[str, object]] = []
         self._loss_step = 0
         self._metrics_enabled = True
+        self._grad_norm_history: list[float] = []
         # Optional CUDA memory history (heavyweight) controlled via env vars.
         self._memory_history_enabled = bool(os.environ.get("JEPA_MEMORY_HISTORY"))
         self._memory_history_dir = Path(os.environ.get("JEPA_MEMORY_HISTORY_DIR", "artifacts/jepa/memory"))
@@ -832,11 +833,17 @@ class ObjectCentricJEPAExperiment:
         parameters = [p for p in self._trainable_parameters if p.grad is not None]
         if not parameters:
             return
-        torch.nn.utils.clip_grad_norm_(
+        total_norm = torch.nn.utils.clip_grad_norm_(
             parameters,
             max_norm=self.grad_clip_config.max_norm,
             norm_type=self.grad_clip_config.norm_type,
         )
+        try:
+            if torch.isfinite(total_norm):
+                self._grad_norm_history.append(float(total_norm.detach().float().cpu().item()))
+        except Exception:
+            # Best-effort logging only; never break training on diagnostics.
+            pass
 
     def _step_optimizer(self, loss: torch.Tensor) -> None:
         optimizer_stepped = False
@@ -1067,3 +1074,24 @@ class ObjectCentricJEPAExperiment:
             event["relational"] = float(relational.detach().float().cpu().item())
         self._loss_events.append(event)
         self._loss_step += 1
+
+    def consume_grad_norms(self) -> list[float]:
+        norms = self._grad_norm_history
+        self._grad_norm_history = []
+        return norms
+
+    def current_temperature(self) -> float | None:
+        if torch is None:
+            return None
+        log_temp = self.log_temperature if self.loss_config.learnable_temperature else self._log_temperature
+        try:
+            temp = torch.exp(log_temp).clamp(*self._temperature_bounds)
+            return float(temp.detach().float().cpu().item())
+        except Exception:
+            return None
+
+    def queue_fill_level(self) -> int:
+        try:
+            return int(self.queue.filled.item())
+        except Exception:
+            return 0

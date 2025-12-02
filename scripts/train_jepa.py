@@ -202,6 +202,29 @@ def main() -> None:
 
     embedding_metrics_handle = None
     embedding_metrics_path = checkpoint_dir / "embedding_metrics.jsonl"
+    epoch_metrics_path = checkpoint_dir / "epoch_metrics.jsonl"
+
+    def _summarize_loss_events(events: list[dict[str, object]]) -> dict[str, float]:
+        summary: dict[str, float] = {}
+        counts: dict[str, int] = {}
+        for event in events:
+            for key, value in event.items():
+                if key == "step":
+                    continue
+                counts[key] = counts.get(key, 0) + 1
+                summary[key] = summary.get(key, 0.0) + float(value)
+        for key, total in summary.items():
+            summary[key] = total / max(1, counts.get(key, 1))
+        return summary
+
+    def _summarize_list(values: list[float]) -> dict[str, float] | None:
+        if not values:
+            return None
+        return {
+            "count": float(len(values)),
+            "mean": float(sum(values) / len(values)),
+            "max": float(max(values)),
+        }
 
     def _handle_embedding_events(events: list[dict[str, object]]) -> None:
         nonlocal embedding_metrics_handle
@@ -273,6 +296,40 @@ def main() -> None:
                     if "relational" in event:
                         scalars["relational"] = float(event["relational"])
                     logger.log_scalars("loss", scalars, step=int(event.get("step", epoch)))
+
+            loss_summary = _summarize_loss_events(loss_events)
+            grad_norms = experiment.consume_grad_norms()
+            grad_summary = _summarize_list(grad_norms)
+            queue_fill = experiment.queue_fill_level()
+            temperature = experiment.current_temperature()
+
+            if logger is not None:
+                if loss_summary:
+                    logger.log_scalars("loss/epoch_mean", loss_summary, step=epoch)
+                if grad_summary is not None:
+                    logger.log_scalars(
+                        "grad_norm",
+                        {
+                            "mean": grad_summary["mean"],
+                            "max": grad_summary["max"],
+                        },
+                        step=epoch,
+                    )
+                logger.log_scalar("queue/fill", float(queue_fill), step=epoch)
+                if temperature is not None:
+                    logger.log_scalar("temperature/current", float(temperature), step=epoch)
+
+            if not ddp_enabled or dist.get_rank() == 0:
+                diagnostics_entry = {
+                    "epoch": epoch,
+                    "loss_mean": loss_summary or None,
+                    "grad_norm": grad_summary,
+                    "queue_fill": queue_fill,
+                    "temperature": temperature,
+                }
+                epoch_metrics_path.parent.mkdir(parents=True, exist_ok=True)
+                with epoch_metrics_path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(diagnostics_entry) + "\n")
 
             events = experiment.consume_embedding_metrics()
             _handle_embedding_events(events)
