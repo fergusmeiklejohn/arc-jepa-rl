@@ -205,6 +205,12 @@ class ObjectCentricJEPAExperiment:
             layers=self.loss_config.projection_layers,
             activation=self.loss_config.projection_activation,
         ).to(self.device)
+
+        # Temporal attention for context aggregation (replaces double mean-pooling)
+        self.context_attention = torch.nn.Sequential(
+            torch.nn.Linear(self.context_length, self.context_length),
+            torch.nn.Softmax(dim=-1)
+        ).to(self.device)
         self._sigreg_loss_module: SIGRegLoss | None = None
         if self.sigreg_config.enabled:
             self._sigreg_loss_module = SIGRegLoss(
@@ -238,7 +244,11 @@ class ObjectCentricJEPAExperiment:
             self._log_temperature = torch.log(temperature_value).detach()
 
         opt_cfg = OptimizerConfig.from_mapping(config.get("optimizer"))
-        params = list(self.trainer.encoder.parameters()) + list(self.projection_head.parameters())
+        params = (
+            list(self.trainer.encoder.parameters())
+            + list(self.projection_head.parameters())
+            + list(self.context_attention.parameters())
+        )
         if self.loss_config.learnable_temperature:
             params.append(self.log_temperature)
 
@@ -504,7 +514,12 @@ class ObjectCentricJEPAExperiment:
         )
         per_grid_repr = self._masked_mean(encoding.embeddings, encoding.mask.to(self.device))
         reshaped = per_grid_repr.view(batch_size, context_length, -1)
-        aggregated = reshaped.mean(dim=1)
+
+        # Learnable temporal attention aggregation (preserves sequence information)
+        # Shape: (batch, context_length, hidden) -> (batch, context_length, 1)
+        attention_weights = self.context_attention(reshaped.transpose(1, 2)).transpose(1, 2)
+        aggregated = (reshaped * attention_weights).sum(dim=1)
+
         if return_encoding:
             return aggregated, encoding
         return aggregated
@@ -745,12 +760,20 @@ class ObjectCentricJEPAExperiment:
             param.requires_grad_(False)
         self._target_projection_head = projection_copy
 
+        # Copy context attention for target network
+        attention_copy = copy.deepcopy(self.context_attention).to(self.device)
+        for param in attention_copy.parameters():
+            param.requires_grad_(False)
+        self._target_context_attention = attention_copy
+
     def _update_target_network(self) -> None:
         if not self._use_target_encoder or self._target_encoder is None or self._target_projection_head is None:
             return
         decay = self.loss_config.target_ema_decay
         self._ema_update(self._target_encoder, self.trainer.encoder, decay)
         self._ema_update(self._target_projection_head, self.projection_head, decay)
+        if hasattr(self, '_target_context_attention'):
+            self._ema_update(self._target_context_attention, self.context_attention, decay)
 
     def _ema_update(self, target_module: torch.nn.Module, online_module: torch.nn.Module, decay: float) -> None:
         with torch.no_grad():
