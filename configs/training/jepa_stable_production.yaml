@@ -1,0 +1,126 @@
+# JEPA Production Configuration - Stable VQ with Gentle Parameters
+# Based on successful diagnostic_vq_gentle results
+# Ready for 80-epoch production run
+
+seed: 123
+dataset_manifest: data/pilot_curriculum_large/manifest.jsonl
+
+data:
+  context_window: 3
+  target_offset: 1
+  shuffle: true
+  validation:
+    split: 0.02
+    seed: 13
+
+tokenizer:
+  max_objects: 16
+  max_color_features: 10
+  background: 0
+  connectivity: 4
+  normalize: true
+  respect_colors: true
+
+object_encoder:
+  hidden_dim: 384
+  num_embeddings: 768
+  commitment_cost: 0.15     # Reduced from 0.3 - less aggressive quantization
+  ema_decay: 0.95           # Faster than 0.99 - better tracking
+  vq_enabled: true
+  vq_refresh_enabled: true
+  vq_refresh_interval: 3000 # Less frequent - safety net only
+  vq_refresh_usage_threshold: 0.01  # Lower threshold
+  activation: "gelu"
+  relational: true
+  relational_layers: 3
+  relational_heads: 8
+  relational_dropout: 0.1
+
+model:
+  type: "conv"
+  embedding_dim: 512
+  projection_dim: 256
+  projection_layers: 2
+
+optimizer:
+  name: "adam"
+  lr: 5.0e-5
+  weight_decay: 1.0e-6
+
+training:
+  batch_size: 512
+  grad_accum_steps: 2
+  num_workers: 8
+  epochs: 80                # Full production run
+  checkpoint_dir: artifacts/jepa/stable_production
+  checkpoint_interval: 5
+  device: cuda
+  drop_last: true
+  mixed_precision: "bf16"
+  pin_memory: true
+  grad_clip:
+    max_norm: 0.5
+    norm_type: 2.0
+  lr_scheduler:
+    name: "cosine"
+    warmup_steps: 1000
+    min_lr_scale: 0.1
+    total_steps: 4000
+  early_stopping:
+    enabled: true
+    patience: 25            # More patient than diagnostic (was 20)
+    min_delta: 0.005        # Slightly tighter than diagnostic (was 0.01)
+    mode: min
+
+augmentations:
+  mask_ratio: 0.1
+  random_crop_radius: 1
+  palette_permutation: true
+  gaussian_noise_std: 0.05
+  min_grid_size_for_crop: 8
+
+loss:
+  objective: "infonce"
+  temperature: 0.07
+  temperature_min: 0.05     # Wider range for adaptation
+  temperature_max: 0.20
+  learnable_temperature: true
+  queue_size: 8192
+  projection_dim: 256
+  projection_layers: 2
+  projection_activation: "relu"
+  use_target_encoder: true
+  target_ema_decay: 0.99
+
+sigreg:
+  weight: 0.1
+  num_slices: 1024
+  num_points: 17
+
+invariance:
+  color_weight: 0.1
+  translation_weight: 0.05
+  translation_max_delta: 0.1
+  symmetry_weight: 0.05
+  symmetry_modes: ["horizontal", "vertical"]
+
+relational_loss:
+  weight: 0.025             # Reduced to minimize interference
+  context_self_weight: 0.01
+
+logging:
+  enabled: true
+  log_dir: artifacts/jepa/stable_production/tensorboard
+  flush_secs: 10
+  run_name: jepa_stable_production
+
+diagnostics:
+  embedding_metrics:
+    enabled: true
+    interval: 100           # More frequent monitoring than diagnostic
+    max_samples: 4096
+
+pre_tokenized:
+  path: artifacts/tokenized/pilot_curriculum_large
+  shuffle: true
+  drop_last: true
