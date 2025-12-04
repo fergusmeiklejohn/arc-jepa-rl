@@ -1,0 +1,135 @@
+# JEPA Phase 3 Configuration - Gumbel-Softmax VQ
+# Based on: jepa_lejepa_aligned.yaml (Phase 2 L-JEPA alignment)
+# Key changes from Phase 2:
+#   - vq_mode: "gumbel" (differentiable VQ, no commitment loss needed)
+#   - num_embeddings: 256 (smaller codebook for higher utilization)
+#   - Temperature annealing: 1.0 → 0.1 over 4000 steps
+#   - Entropy regularization: encourages uniform codebook usage
+#
+# Benefits of Gumbel-Softmax VQ:
+#   - Fully differentiable (gradients flow through quantization)
+#   - No commitment loss heuristic
+#   - No EMA updates (codebook learned directly)
+#   - No refresh mechanism needed
+#   - Natural codebook utilization via entropy regularization
+
+seed: 123
+dataset_manifest: data/pilot_curriculum_large/manifest.jsonl
+
+data:
+  context_window: 3
+  target_offset: 1
+  shuffle: true
+  validation:
+    split: 0.02
+    seed: 13
+
+tokenizer:
+  max_objects: 16
+  max_color_features: 10
+  background: 0
+  connectivity: 4
+  normalize: true
+  respect_colors: true
+
+object_encoder:
+  hidden_dim: 384
+  # VQ Configuration - Phase 3 changes
+  num_embeddings: 256           # PHASE 3: Reduced from 768 (higher utilization expected)
+  vq_mode: "gumbel"             # PHASE 3: Differentiable VQ (was "hard")
+  vq_temperature_init: 1.0      # Initial temperature (soft assignments)
+  vq_temperature_min: 0.1       # Final temperature (sharp assignments)
+  vq_temperature_anneal_steps: 4000  # Anneal over ~80% of training
+  vq_straight_through: true     # Use straight-through estimator
+  vq_entropy_weight: 0.01       # Entropy regularization (encourages codebook usage)
+  # Legacy hard VQ params (ignored in gumbel mode)
+  commitment_cost: 0.15
+  ema_decay: 0.95
+  vq_enabled: true
+  vq_refresh_enabled: false
+  vq_refresh_interval: 3000
+  vq_refresh_usage_threshold: 0.01
+  # Encoder architecture
+  activation: "gelu"
+  relational: true
+  relational_layers: 3
+  relational_heads: 8
+  relational_dropout: 0.1
+
+model:
+  type: "conv"
+  embedding_dim: 512
+  projection_dim: 256
+  projection_layers: 2
+
+optimizer:
+  name: "adam"
+  lr: 5.0e-5
+  weight_decay: 1.0e-6
+
+training:
+  batch_size: 1024
+  grad_accum_steps: 2
+  num_workers: 8
+  epochs: 80
+  checkpoint_dir: artifacts/jepa/phase3_gumbel
+  checkpoint_interval: 5
+  device: cuda
+  drop_last: true
+  mixed_precision: "bf16"
+  pin_memory: true
+  grad_clip:
+    max_norm: 0.5
+    norm_type: 2.0
+  lr_scheduler:
+    name: "cosine"
+    warmup_steps: 500
+    min_lr_scale: 0.1
+    total_steps: 2000
+  early_stopping:
+    enabled: false          # L-JEPA loss plateaus, disabled
+    patience: 15
+    min_delta: 0.0001
+    mode: min
+
+augmentations:
+  mask_ratio: 0.1
+  random_crop_radius: 1
+  palette_permutation: true
+  gaussian_noise_std: 0.05
+  min_grid_size_for_crop: 8
+
+loss:
+  objective: "sigreg"           # L-JEPA style L2 + SIGReg
+  temperature: 0.07
+  temperature_min: 0.05
+  temperature_max: 0.20
+  learnable_temperature: false
+  queue_size: 8192
+  projection_dim: 256
+  projection_layers: 2
+  projection_activation: "relu"
+  use_target_encoder: false
+  target_ema_decay: 0.99
+
+sigreg:
+  weight: 0.05                  # Paper-recommended λ value
+  num_slices: 1024
+  num_points: 17
+
+logging:
+  enabled: true
+  log_dir: artifacts/jepa/phase3_gumbel/tensorboard
+  flush_secs: 10
+  run_name: jepa_phase3_gumbel
+
+diagnostics:
+  embedding_metrics:
+    enabled: true
+    interval: 100
+    max_samples: 4096
+
+pre_tokenized:
+  path: artifacts/tokenized/pilot_curriculum_large
+  shuffle: true
+  drop_last: true

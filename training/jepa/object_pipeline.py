@@ -76,6 +76,13 @@ class ObjectEncoderConfig:
     relational_heads: int = 4
     relational_dropout: float = 0.0
     vq_enabled: bool = True
+    # New Gumbel-Softmax VQ parameters
+    vq_mode: str = "hard"  # "hard" or "gumbel"
+    vq_temperature_init: float = 1.0
+    vq_temperature_min: float = 0.1
+    vq_temperature_anneal_steps: int = 10000
+    vq_straight_through: bool = True
+    vq_entropy_weight: float = 0.01
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, object] | None) -> "ObjectEncoderConfig":
@@ -101,6 +108,15 @@ class ObjectEncoderConfig:
             relational_heads=int(data.get("relational_heads", cls.relational_heads)),
             relational_dropout=float(data.get("relational_dropout", cls.relational_dropout)),
             vq_enabled=vq_enabled,
+            # Gumbel VQ params
+            vq_mode=str(data.get("vq_mode", cls.vq_mode)),
+            vq_temperature_init=float(data.get("vq_temperature_init", cls.vq_temperature_init)),
+            vq_temperature_min=float(data.get("vq_temperature_min", cls.vq_temperature_min)),
+            vq_temperature_anneal_steps=int(
+                data.get("vq_temperature_anneal_steps", cls.vq_temperature_anneal_steps)
+            ),
+            vq_straight_through=bool(data.get("vq_straight_through", cls.vq_straight_through)),
+            vq_entropy_weight=float(data.get("vq_entropy_weight", cls.vq_entropy_weight)),
         )
 
 
@@ -243,6 +259,12 @@ def build_object_encoder(
         vq_refresh_enabled=encoder_cfg.vq_refresh_enabled,
         vq_refresh_interval=encoder_cfg.vq_refresh_interval,
         vq_refresh_usage_threshold=encoder_cfg.vq_refresh_usage_threshold,
+        vq_mode=encoder_cfg.vq_mode,
+        vq_temperature_init=encoder_cfg.vq_temperature_init,
+        vq_temperature_min=encoder_cfg.vq_temperature_min,
+        vq_temperature_anneal_steps=encoder_cfg.vq_temperature_anneal_steps,
+        vq_straight_through=encoder_cfg.vq_straight_through,
+        vq_entropy_weight=encoder_cfg.vq_entropy_weight,
         activation=encoder_cfg.activation,
         relational=encoder_cfg.relational,
         relational_layers=encoder_cfg.relational_layers,

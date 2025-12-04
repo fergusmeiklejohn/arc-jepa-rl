@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 try:  # pragma: no cover - torch optional
     import torch
@@ -11,7 +12,13 @@ except Exception:  # pragma: no cover
     torch = None  # type: ignore
     nn = object  # type: ignore
 
-from .vq import VectorQuantizer, VectorQuantizerUnavailable
+from .vq import (
+    VectorQuantizer,
+    GumbelVectorQuantizer,
+    VectorQuantizerUnavailable,
+    create_vector_quantizer,
+    VQMode,
+)
 from .relational import RelationalAggregator, RelationalModuleUnavailable
 
 
@@ -35,6 +42,12 @@ if torch is not None:  # pragma: no branch
             vq_refresh_enabled: bool = False,
             vq_refresh_interval: int = 100,
             vq_refresh_usage_threshold: float = 1e-3,
+            vq_mode: VQMode = "hard",
+            vq_temperature_init: float = 1.0,
+            vq_temperature_min: float = 0.1,
+            vq_temperature_anneal_steps: int = 10000,
+            vq_straight_through: bool = True,
+            vq_entropy_weight: float = 0.01,
             activation: str = "gelu",
             relational: bool = True,
             relational_layers: int = 2,
@@ -72,15 +85,24 @@ if torch is not None:  # pragma: no branch
                 else None
             )
 
+            self.vq_mode = vq_mode
             if num_embeddings is not None:
-                self.vq = VectorQuantizer(
+                self.vq = create_vector_quantizer(
+                    mode=vq_mode,
                     num_embeddings=num_embeddings,
                     embedding_dim=hidden_dim,
+                    # Hard VQ params
                     commitment_cost=commitment_cost,
                     ema_decay=ema_decay,
                     refresh_unused_codes=vq_refresh_enabled,
                     refresh_interval=vq_refresh_interval,
                     refresh_usage_threshold=vq_refresh_usage_threshold,
+                    # Gumbel VQ params
+                    temperature_init=vq_temperature_init,
+                    temperature_min=vq_temperature_min,
+                    temperature_anneal_steps=vq_temperature_anneal_steps,
+                    straight_through=vq_straight_through,
+                    entropy_weight=vq_entropy_weight,
                 )
             else:
                 self.vq = None
