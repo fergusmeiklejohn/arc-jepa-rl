@@ -58,7 +58,7 @@ training:
   batch_size: 1024          # INCREASED from 512 for better GPU utilization (SM was 60-80%)
   grad_accum_steps: 2       # Effective batch size: 2048
   num_workers: 8
-  epochs: 80
+  epochs: 200               # Extended run to see convergence behavior
   checkpoint_dir: artifacts/jepa/lejepa_aligned
   checkpoint_interval: 5
   device: cuda
