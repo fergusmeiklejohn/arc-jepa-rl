@@ -82,6 +82,7 @@ class OptimizerConfig:
 
 @dataclass(frozen=True)
 class InfoNCELossConfig:
+    objective: str = "infonce"  # "infonce" or "sigreg" (L-JEPA style)
     temperature: float = 0.1
     temperature_init: float = 0.1
     temperature_min: float = 0.05
@@ -116,7 +117,11 @@ class InfoNCELossConfig:
         )
         if temperature_value <= 0:
             raise ValueError("temperature must be positive")
+        objective = str(data.get("objective", cls.objective)).lower()
+        if objective not in ("infonce", "sigreg"):
+            raise ValueError(f"objective must be 'infonce' or 'sigreg', got '{objective}'")
         return cls(
+            objective=objective,
             temperature=temperature_value,
             temperature_init=float(data.get("temperature_init", temperature_value)),
             temperature_min=temperature_min,
@@ -451,24 +456,48 @@ class ObjectCentricJEPAExperiment:
             else:
                 target_repr, target_encoding = self._encode_tokenized_target(batch, return_encoding=True)  # type: ignore[assignment]
                 target_proj = self.projection_head(target_repr)
-            info_nce_loss = self._info_nce_loss(context_proj, target_proj)
-        total_loss = info_nce_loss
-        invariance_loss = self._token_invariance_loss(batch, context_repr, target_repr)
-        if invariance_loss is not None:
-            total_loss = total_loss + invariance_loss
-        relational_loss = self._relational_consistency_loss(
-            context_encoding,
-            target_encoding,
-            batch_size=batch.context_features.size(0),
-            context_length=batch.context_length,
-        )
-        if relational_loss is not None:
-            total_loss = total_loss + relational_loss
+
+            # Compute primary loss based on objective
+            if self.loss_config.objective == "sigreg":
+                # L-JEPA style: L2 predictive loss + SIGReg regularization
+                # No InfoNCE, no temperature, no queue needed
+                l2_loss = torch.nn.functional.mse_loss(context_proj, target_proj)
+                info_nce_loss = None  # Not used in SIGReg mode
+                primary_loss = l2_loss
+            else:
+                # Standard InfoNCE contrastive loss
+                info_nce_loss = self._info_nce_loss(context_proj, target_proj)
+                l2_loss = None
+                primary_loss = info_nce_loss
+
+        total_loss = primary_loss
+
+        # Invariance loss (only in InfoNCE mode, skip in SIGReg mode for simplicity)
+        invariance_loss = None
+        if self.loss_config.objective != "sigreg":
+            invariance_loss = self._token_invariance_loss(batch, context_repr, target_repr)
+            if invariance_loss is not None:
+                total_loss = total_loss + invariance_loss
+
+        # Relational loss (only in InfoNCE mode, skip in SIGReg mode)
+        relational_loss = None
+        if self.loss_config.objective != "sigreg":
+            relational_loss = self._relational_consistency_loss(
+                context_encoding,
+                target_encoding,
+                batch_size=batch.context_features.size(0),
+                context_length=batch.context_length,
+            )
+            if relational_loss is not None:
+                total_loss = total_loss + relational_loss
+
+        # SIGReg penalty (applied in both modes, but primary in SIGReg mode)
         sigreg_penalty = self._sigreg_penalty(context_proj)
         sigreg_contrib = None
         if sigreg_penalty is not None and self.sigreg_config.weight != 0.0:
             sigreg_contrib = self.sigreg_config.weight * sigreg_penalty
             total_loss = total_loss + sigreg_contrib
+
         self._record_loss_components(
             info_nce=info_nce_loss,
             total=total_loss,
@@ -476,6 +505,7 @@ class ObjectCentricJEPAExperiment:
             sigreg_weighted=sigreg_contrib,
             invariance=invariance_loss,
             relational=relational_loss,
+            l2_loss=l2_loss,
         )
         self._record_embedding_metrics(
             context_proj,
@@ -1072,21 +1102,27 @@ class ObjectCentricJEPAExperiment:
     def _record_loss_components(
         self,
         *,
-        info_nce: torch.Tensor,
+        info_nce: torch.Tensor | None,
         total: torch.Tensor,
         sigreg_raw: torch.Tensor | None,
         sigreg_weighted: torch.Tensor | None,
         invariance: torch.Tensor | None = None,
         relational: torch.Tensor | None = None,
+        l2_loss: torch.Tensor | None = None,
     ) -> None:
         if not self._metrics_enabled:
             return
         event: dict[str, object] = {
             "step": self._loss_step,
-            "info_nce": float(info_nce.detach().float().cpu().item()),
             "total": float(total.detach().float().cpu().item()),
             "sigreg": 0.0,
         }
+        # info_nce is None in SIGReg-primary mode
+        if info_nce is not None:
+            event["info_nce"] = float(info_nce.detach().float().cpu().item())
+        # l2_loss is used in SIGReg-primary mode
+        if l2_loss is not None:
+            event["l2_loss"] = float(l2_loss.detach().float().cpu().item())
         if sigreg_weighted is not None:
             event["sigreg"] = float(sigreg_weighted.detach().float().cpu().item())
         if sigreg_raw is not None:

@@ -1,0 +1,134 @@
+# JEPA L-JEPA Aligned Configuration - Phase 2
+# Based on: jepa_production_v2.yaml (Phase 1 emergency fixes)
+# Key changes from Phase 1:
+#   - objective: "sigreg" (L-JEPA style L2 + SIGReg, not InfoNCE)
+#   - sigreg.weight: 1.0 (primary regularizer, was 0.1 auxiliary)
+#   - Removed: relational_loss, invariance (L-JEPA is heuristic-free)
+#   - Simplified: No temperature tuning needed (not using InfoNCE)
+# Expected outcome: val loss < 8.0, reduced hyperparameters, L-JEPA alignment ~80%
+
+seed: 123
+dataset_manifest: data/pilot_curriculum_large/manifest.jsonl
+
+data:
+  context_window: 3
+  target_offset: 1
+  shuffle: true
+  validation:
+    split: 0.02
+    seed: 13
+
+tokenizer:
+  max_objects: 16
+  max_color_features: 10
+  background: 0
+  connectivity: 4
+  normalize: true
+  respect_colors: true
+
+object_encoder:
+  hidden_dim: 384
+  num_embeddings: 768
+  commitment_cost: 0.15     # Keep gentle VQ parameters from Phase 1
+  ema_decay: 0.95
+  vq_enabled: true
+  vq_refresh_enabled: false # Phase 1 fix: disabled
+  vq_refresh_interval: 3000
+  vq_refresh_usage_threshold: 0.01
+  activation: "gelu"
+  relational: true
+  relational_layers: 3
+  relational_heads: 8
+  relational_dropout: 0.1
+
+model:
+  type: "conv"
+  embedding_dim: 512
+  projection_dim: 256
+  projection_layers: 2
+
+optimizer:
+  name: "adam"
+  lr: 5.0e-5
+  weight_decay: 1.0e-6
+
+training:
+  batch_size: 512
+  grad_accum_steps: 2
+  num_workers: 8
+  epochs: 80
+  checkpoint_dir: artifacts/jepa/lejepa_aligned
+  checkpoint_interval: 5
+  device: cuda
+  drop_last: true
+  mixed_precision: "bf16"
+  pin_memory: true
+  grad_clip:
+    max_norm: 0.5
+    norm_type: 2.0
+  lr_scheduler:
+    name: "cosine"
+    warmup_steps: 1000
+    min_lr_scale: 0.1
+    total_steps: 4000
+  early_stopping:
+    enabled: true
+    patience: 15            # Phase 1 fix
+    min_delta: 0.01         # Phase 1 fix
+    mode: min
+
+augmentations:
+  mask_ratio: 0.1
+  random_crop_radius: 1
+  palette_permutation: true
+  gaussian_noise_std: 0.05
+  min_grid_size_for_crop: 8
+
+loss:
+  objective: "sigreg"       # L-JEPA CHANGE: Use L2 + SIGReg instead of InfoNCE
+  # InfoNCE parameters below are kept for compatibility but not used in sigreg mode
+  temperature: 0.07
+  temperature_min: 0.05
+  temperature_max: 0.20
+  learnable_temperature: false  # Not needed in SIGReg mode
+  queue_size: 8192              # Not used in SIGReg mode (no negative sampling)
+  projection_dim: 256
+  projection_layers: 2
+  projection_activation: "relu"
+  use_target_encoder: false     # L-JEPA: no teacher-student by default
+  target_ema_decay: 0.99
+
+sigreg:
+  weight: 1.0               # L-JEPA CHANGE: Primary regularizer (was 0.1 auxiliary)
+  num_slices: 1024
+  num_points: 17
+
+# REMOVED: invariance section (L-JEPA is heuristic-free)
+# invariance:
+#   color_weight: 0.1
+#   translation_weight: 0.05
+#   translation_max_delta: 0.1
+#   symmetry_weight: 0.05
+#   symmetry_modes: ["horizontal", "vertical"]
+
+# REMOVED: relational_loss section (L-JEPA doesn't use relational loss)
+# relational_loss:
+#   weight: 0.0
+#   context_self_weight: 0.0
+
+logging:
+  enabled: true
+  log_dir: artifacts/jepa/lejepa_aligned/tensorboard
+  flush_secs: 10
+  run_name: jepa_lejepa_aligned
+
+diagnostics:
+  embedding_metrics:
+    enabled: true
+    interval: 100
+    max_samples: 4096
+
+pre_tokenized:
+  path: artifacts/tokenized/pilot_curriculum_large
+  shuffle: true
+  drop_last: true
