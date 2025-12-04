@@ -2,10 +2,12 @@
 # Based on: jepa_production_v2.yaml (Phase 1 emergency fixes)
 # Key changes from Phase 1:
 #   - objective: "sigreg" (L-JEPA style L2 + SIGReg, not InfoNCE)
-#   - sigreg.weight: 1.0 (primary regularizer, was 0.1 auxiliary)
+#   - sigreg.weight: 0.05 (paper-recommended value, arXiv 2511.08544)
 #   - Removed: relational_loss, invariance (L-JEPA is heuristic-free)
 #   - Simplified: No temperature tuning needed (not using InfoNCE)
-# Expected outcome: val loss < 8.0, reduced hyperparameters, L-JEPA alignment ~80%
+#
+# L-JEPA Loss (Equation 9): ℒ = (λ/V) × Σ SIGReg + (1/B) × Σ ||μ - z||²
+# Paper recommends: λ = 0.05, no predictor network, no teacher-student
 
 seed: 123
 dataset_manifest: data/pilot_curriculum_large/manifest.jsonl
@@ -99,7 +101,7 @@ loss:
   target_ema_decay: 0.99
 
 sigreg:
-  weight: 1.0               # L-JEPA CHANGE: Primary regularizer (was 0.1 auxiliary)
+  weight: 0.05              # Paper-recommended λ value (was 1.0 - way too high!)
   num_slices: 1024
   num_points: 17
 
