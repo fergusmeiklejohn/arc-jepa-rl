@@ -60,7 +60,7 @@ training:
   num_workers: 8
   epochs: 200               # Extended run to see convergence behavior
   checkpoint_dir: artifacts/jepa/lejepa_aligned
-  checkpoint_interval: 5
+  checkpoint_interval: 25        # Reduced frequency (was 5) - saves every 25 epochs
   device: cuda
   drop_last: true
   mixed_precision: "bf16"
@@ -97,7 +97,7 @@ loss:
   projection_dim: 256
   projection_layers: 2
   projection_activation: "relu"
-  use_target_encoder: false     # L-JEPA: no teacher-student by default
+  use_target_encoder: true      # Required to prevent collapse - asymmetry between context/target
   target_ema_decay: 0.99
 
 sigreg:
