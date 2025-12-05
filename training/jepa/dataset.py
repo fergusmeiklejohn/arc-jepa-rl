@@ -112,6 +112,7 @@ class AugmentationConfig:
     min_grid_size_for_crop: int = 0
     background_color: int = 0
     geometric_augmentation: bool = False  # Enable random rotations and flips
+    object_dropout: float = 0.0  # Probability of dropping entire objects (filling with background)
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, object] | None) -> "AugmentationConfig":
@@ -140,6 +141,10 @@ class AugmentationConfig:
         if background_color < 0:
             raise ValueError("background_color must be non-negative")
 
+        object_dropout = float(data.get("object_dropout", cls.object_dropout))
+        if not 0.0 <= object_dropout <= 1.0:
+            raise ValueError("object_dropout must be in [0, 1]")
+
         return cls(
             mask_ratio=mask_ratio,
             random_crop_radius=random_crop_radius,
@@ -148,6 +153,7 @@ class AugmentationConfig:
             min_grid_size_for_crop=min_grid_size_for_crop,
             background_color=background_color,
             geometric_augmentation=geometric_augmentation,
+            object_dropout=object_dropout,
         )
 
     def is_identity(self) -> bool:
@@ -157,6 +163,7 @@ class AugmentationConfig:
             and not self.palette_permutation
             and self.gaussian_noise_std == 0.0
             and not self.geometric_augmentation
+            and self.object_dropout == 0.0
         )
 
 
@@ -482,6 +489,98 @@ GEOMETRIC_TRANSFORMS = [
 ]
 
 
+def _find_connected_components(
+    cells: List[List[int]],
+    background: int,
+) -> List[List[Tuple[int, int]]]:
+    """Find connected components (objects) in a grid using flood fill.
+
+    Args:
+        cells: 2D list of cell values
+        background: Background color value to ignore
+
+    Returns:
+        List of objects, where each object is a list of (y, x) coordinates
+    """
+    if not cells or not cells[0]:
+        return []
+
+    height = len(cells)
+    width = len(cells[0])
+    visited = [[False] * width for _ in range(height)]
+    objects: List[List[Tuple[int, int]]] = []
+
+    def flood_fill(start_y: int, start_x: int) -> List[Tuple[int, int]]:
+        """BFS flood fill to find all connected cells of the same color."""
+        color = cells[start_y][start_x]
+        component: List[Tuple[int, int]] = []
+        stack = [(start_y, start_x)]
+
+        while stack:
+            y, x = stack.pop()
+            if y < 0 or y >= height or x < 0 or x >= width:
+                continue
+            if visited[y][x]:
+                continue
+            if cells[y][x] != color:
+                continue
+
+            visited[y][x] = True
+            component.append((y, x))
+
+            # 4-connectivity (same as object tokenizer default)
+            stack.extend([(y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)])
+
+        return component
+
+    for y in range(height):
+        for x in range(width):
+            if visited[y][x]:
+                continue
+            if cells[y][x] == background:
+                visited[y][x] = True
+                continue
+            component = flood_fill(y, x)
+            if component:
+                objects.append(component)
+
+    return objects
+
+
+def _apply_object_dropout(
+    cells: List[List[int]],
+    dropout_prob: float,
+    background: int,
+    rng: random.Random,
+) -> List[List[int]]:
+    """Randomly drop entire objects (connected components) from the grid.
+
+    Args:
+        cells: 2D list of cell values
+        dropout_prob: Probability of dropping each object
+        background: Background color to fill dropped objects with
+        rng: Random number generator
+
+    Returns:
+        Grid with some objects removed
+    """
+    objects = _find_connected_components(cells, background)
+
+    if not objects:
+        return cells
+
+    # Make a copy to modify
+    result = [row[:] for row in cells]
+
+    for obj in objects:
+        if rng.random() < dropout_prob:
+            # Drop this object by filling with background
+            for y, x in obj:
+                result[y][x] = background
+
+    return result
+
+
 def _augment_grid(grid: Grid, config: AugmentationConfig, rng: random.Random) -> Grid:
     if config.is_identity():
         return grid
@@ -540,6 +639,10 @@ def _augment_grid(grid: Grid, config: AugmentationConfig, rng: random.Random) ->
     if config.geometric_augmentation:
         transform = rng.choice(GEOMETRIC_TRANSFORMS)
         cells = _apply_geometric_transform(cells, transform)
+
+    # Object dropout: randomly remove entire connected components
+    if config.object_dropout > 0.0:
+        cells = _apply_object_dropout(cells, config.object_dropout, background, rng)
 
     return Grid(cells)
 
