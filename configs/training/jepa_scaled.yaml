@@ -1,0 +1,127 @@
+# JEPA Scaled Configuration - Larger Model + More Data
+# Based on: jepa_lejepa_aligned.yaml (Phase 2 L-JEPA)
+#
+# Key changes for scaling:
+#   - hidden_dim: 384 → 768 (2x capacity)
+#   - relational_layers: 3 → 6 (2x depth)
+#   - relational_heads: 8 → 12 (1.5x)
+#   - num_embeddings: 768 → 2048 (2.7x codebook)
+#   - projection_dim: 256 → 512 (2x)
+#   - Dataset: 50K → 200K+ samples
+#   - Geometric augmentations enabled
+#
+# Estimated parameters: ~18M (4.3x increase from 4.2M)
+# Target GPU: 48GB A6000
+
+seed: 789
+dataset_manifest: data/curriculum_scaled/manifest.jsonl
+
+data:
+  context_window: 3
+  target_offset: 1
+  shuffle: true
+  validation:
+    split: 0.02
+    seed: 13
+
+tokenizer:
+  max_objects: 16
+  max_color_features: 10
+  background: 0
+  connectivity: 4
+  normalize: true
+  respect_colors: true
+
+object_encoder:
+  hidden_dim: 768             # SCALED: 384 → 768 (2x)
+  num_embeddings: 2048        # SCALED: 768 → 2048 (2.7x)
+  commitment_cost: 0.15
+  ema_decay: 0.95
+  vq_enabled: true
+  vq_refresh_enabled: false
+  vq_refresh_interval: 3000
+  vq_refresh_usage_threshold: 0.01
+  activation: "gelu"
+  relational: true
+  relational_layers: 6        # SCALED: 3 → 6 (2x)
+  relational_heads: 12        # SCALED: 8 → 12 (1.5x)
+  relational_dropout: 0.1
+
+model:
+  type: "conv"
+  embedding_dim: 1024         # SCALED: 512 → 1024 (2x)
+  projection_dim: 512         # SCALED: 256 → 512 (2x)
+  projection_layers: 2
+
+optimizer:
+  name: "adam"
+  lr: 3.0e-5                  # SCALED: 5e-5 → 3e-5 (lower for larger model)
+  weight_decay: 1.0e-6
+
+training:
+  batch_size: 512             # SCALED: 1024 → 512 (memory for larger model)
+  grad_accum_steps: 4         # SCALED: 2 → 4 (maintain effective batch 2048)
+  num_workers: 8
+  epochs: 100                 # SCALED: 200 → 100 (more data = fewer epochs)
+  checkpoint_dir: artifacts/jepa/scaled
+  checkpoint_interval: 10     # More frequent checkpoints
+  device: cuda
+  drop_last: true
+  mixed_precision: "bf16"
+  pin_memory: true
+  grad_clip:
+    max_norm: 0.5
+    norm_type: 2.0
+  lr_scheduler:
+    name: "cosine"
+    warmup_steps: 2000        # SCALED: 500 → 2000 (longer warmup for larger model)
+    min_lr_scale: 0.1
+    total_steps: 40000        # ~390 steps/epoch × 100 epochs
+  early_stopping:
+    enabled: false
+    patience: 15
+    min_delta: 0.0001
+    mode: min
+
+augmentations:
+  mask_ratio: 0.1
+  random_crop_radius: 1
+  palette_permutation: true
+  gaussian_noise_std: 0.05
+  min_grid_size_for_crop: 8
+  geometric_augmentation: true  # NEW: Enable rotations and flips
+
+loss:
+  objective: "sigreg"
+  temperature: 0.07
+  temperature_min: 0.05
+  temperature_max: 0.20
+  learnable_temperature: false
+  queue_size: 8192
+  projection_dim: 512         # SCALED: 256 → 512
+  projection_layers: 2
+  projection_activation: "relu"
+  use_target_encoder: true
+  target_ema_decay: 0.99
+
+sigreg:
+  weight: 0.05
+  num_slices: 1024
+  num_points: 17
+
+logging:
+  enabled: true
+  log_dir: artifacts/jepa/scaled/tensorboard
+  flush_secs: 10
+  run_name: jepa_scaled
+
+diagnostics:
+  embedding_metrics:
+    enabled: true
+    interval: 100
+    max_samples: 4096
+
+pre_tokenized:
+  path: artifacts/tokenized/curriculum_scaled
+  shuffle: true
+  drop_last: true

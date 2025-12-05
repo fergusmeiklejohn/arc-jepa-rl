@@ -111,6 +111,7 @@ class AugmentationConfig:
     gaussian_noise_std: float = 0.0
     min_grid_size_for_crop: int = 0
     background_color: int = 0
+    geometric_augmentation: bool = False  # Enable random rotations and flips
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, object] | None) -> "AugmentationConfig":
@@ -133,6 +134,8 @@ class AugmentationConfig:
         if min_grid_size_for_crop < 0:
             raise ValueError("min_grid_size_for_crop must be non-negative")
 
+        geometric_augmentation = bool(data.get("geometric_augmentation", cls.geometric_augmentation))
+
         background_color = int(data.get("background_color", cls.background_color))
         if background_color < 0:
             raise ValueError("background_color must be non-negative")
@@ -144,6 +147,7 @@ class AugmentationConfig:
             gaussian_noise_std=gaussian_noise_std,
             min_grid_size_for_crop=min_grid_size_for_crop,
             background_color=background_color,
+            geometric_augmentation=geometric_augmentation,
         )
 
     def is_identity(self) -> bool:
@@ -152,6 +156,7 @@ class AugmentationConfig:
             and self.random_crop_radius == 0
             and not self.palette_permutation
             and self.gaussian_noise_std == 0.0
+            and not self.geometric_augmentation
         )
 
 
@@ -376,6 +381,107 @@ def _random_translate(
     return translated
 
 
+def _rotate_90(cells: List[List[int]]) -> List[List[int]]:
+    """Rotate grid 90 degrees clockwise."""
+    if not cells or not cells[0]:
+        return cells
+    height = len(cells)
+    width = len(cells[0])
+    # New dimensions: width x height
+    rotated = [[0 for _ in range(height)] for _ in range(width)]
+    for y in range(height):
+        for x in range(width):
+            rotated[x][height - 1 - y] = cells[y][x]
+    return rotated
+
+
+def _rotate_180(cells: List[List[int]]) -> List[List[int]]:
+    """Rotate grid 180 degrees."""
+    if not cells or not cells[0]:
+        return cells
+    height = len(cells)
+    width = len(cells[0])
+    rotated = [[0 for _ in range(width)] for _ in range(height)]
+    for y in range(height):
+        for x in range(width):
+            rotated[height - 1 - y][width - 1 - x] = cells[y][x]
+    return rotated
+
+
+def _rotate_270(cells: List[List[int]]) -> List[List[int]]:
+    """Rotate grid 270 degrees clockwise (90 counter-clockwise)."""
+    if not cells or not cells[0]:
+        return cells
+    height = len(cells)
+    width = len(cells[0])
+    # New dimensions: width x height
+    rotated = [[0 for _ in range(height)] for _ in range(width)]
+    for y in range(height):
+        for x in range(width):
+            rotated[width - 1 - x][y] = cells[y][x]
+    return rotated
+
+
+def _flip_horizontal(cells: List[List[int]]) -> List[List[int]]:
+    """Flip grid horizontally (left-right mirror)."""
+    if not cells:
+        return cells
+    return [row[::-1] for row in cells]
+
+
+def _flip_vertical(cells: List[List[int]]) -> List[List[int]]:
+    """Flip grid vertically (top-bottom mirror)."""
+    if not cells:
+        return cells
+    return cells[::-1]
+
+
+def _apply_geometric_transform(
+    cells: List[List[int]],
+    transform: str,
+) -> List[List[int]]:
+    """Apply a geometric transformation to the grid.
+
+    Args:
+        cells: 2D list of cell values
+        transform: One of "none", "rot90", "rot180", "rot270", "flip_h", "flip_v",
+                   "rot90_flip_h", "rot90_flip_v"
+
+    Returns:
+        Transformed grid cells
+    """
+    if transform == "none":
+        return cells
+    elif transform == "rot90":
+        return _rotate_90(cells)
+    elif transform == "rot180":
+        return _rotate_180(cells)
+    elif transform == "rot270":
+        return _rotate_270(cells)
+    elif transform == "flip_h":
+        return _flip_horizontal(cells)
+    elif transform == "flip_v":
+        return _flip_vertical(cells)
+    elif transform == "rot90_flip_h":
+        return _flip_horizontal(_rotate_90(cells))
+    elif transform == "rot90_flip_v":
+        return _flip_vertical(_rotate_90(cells))
+    else:
+        return cells
+
+
+GEOMETRIC_TRANSFORMS = [
+    "none",
+    "rot90",
+    "rot180",
+    "rot270",
+    "flip_h",
+    "flip_v",
+    "rot90_flip_h",
+    "rot90_flip_v",
+]
+
+
 def _augment_grid(grid: Grid, config: AugmentationConfig, rng: random.Random) -> Grid:
     if config.is_identity():
         return grid
@@ -429,6 +535,11 @@ def _augment_grid(grid: Grid, config: AugmentationConfig, rng: random.Random) ->
                 if clamped > max_value:
                     clamped = max_value
                 cells[y][x] = clamped
+
+    # Apply random geometric transformation (rotation/flip)
+    if config.geometric_augmentation:
+        transform = rng.choice(GEOMETRIC_TRANSFORMS)
+        cells = _apply_geometric_transform(cells, transform)
 
     return Grid(cells)
 

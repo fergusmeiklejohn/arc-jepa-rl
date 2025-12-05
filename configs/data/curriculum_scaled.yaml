@@ -1,0 +1,24 @@
+# Scaled synthetic ARC curriculum for improved JEPA training
+# 200K samples total (4x current dataset) with wider diversity
+seed: 456
+output_root: data/curriculum_scaled
+
+task_schedule:
+  atomic: 100000      # 30K → 100K (3.3x) - single primitive operations
+  sequential: 100000  # 20K → 100K (5x) - combined primitives
+
+generator:
+  grid_size:
+    min: 4            # Smaller grids for diversity (was 6)
+    max: 18           # Larger grids for complexity (was 14)
+  colors:
+    min: 2            # Simpler palettes for some variety
+    max: 9            # More complex palettes (was 6)
+  background_color: 0
+  fill_probability: 0.6  # Slightly less fill for more sparse patterns
+  max_parameter_retries: 8
+  max_task_retries: 16
+
+export:
+  include_png: false
+  compress_json: false
