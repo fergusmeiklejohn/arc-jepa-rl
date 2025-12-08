@@ -1,0 +1,152 @@
+# JEPA Scaled V4 - Asymmetric Masking (I-JEPA Style)
+# Based on: L-JEPA + I-JEPA masking strategy
+#
+# Key insight from V3: Loss plateaued at 0.02016 because:
+#   - L2 prediction became trivially easy (→ 0)
+#   - Only SIGReg regularization remained
+#   - Model learned to predict targets almost perfectly
+#
+# Solution: Make prediction genuinely hard via ASYMMETRIC MASKING
+#   - Context: Heavy masking (50% mask + 30% object dropout)
+#   - Target: No masking (clean prediction targets)
+#   - This forces the model to predict full targets from partial context
+#
+# I-JEPA uses 75-90% patch masking. We use equivalent for ARC:
+#   - 50% cell masking + 30% object dropout ≈ 65% information removal
+#
+# L-JEPA alignment maintained:
+#   - Loss: (1-λ)L2 + λ*SIGReg with λ=0.05
+#   - No EMA target encoder (SIGReg prevents collapse)
+#
+# Expected params: ~18M (unchanged)
+# Target GPU: 48GB A6000
+
+seed: 792
+dataset_manifest: data/curriculum_scaled/manifest.jsonl
+
+data:
+  context_window: 3
+  target_offset: 1
+  shuffle: true
+  validation:
+    split: 0.02
+    seed: 13
+
+tokenizer:
+  max_objects: 16
+  max_color_features: 10
+  background: 0
+  connectivity: 4
+  normalize: true
+  respect_colors: true
+
+object_encoder:
+  hidden_dim: 768
+  num_embeddings: 2048
+  commitment_cost: 0.15
+  ema_decay: 0.95
+  vq_enabled: true
+  vq_refresh_enabled: false
+  vq_refresh_interval: 3000
+  vq_refresh_usage_threshold: 0.01
+  activation: "gelu"
+  relational: true
+  relational_layers: 6
+  relational_heads: 12
+  relational_dropout: 0.1
+
+model:
+  type: "conv"
+  embedding_dim: 1024
+  projection_dim: 512
+  projection_layers: 2
+
+optimizer:
+  name: "adam"
+  lr: 3.0e-5
+  weight_decay: 1.0e-6
+
+training:
+  batch_size: 512
+  grad_accum_steps: 4
+  num_workers: 8
+  epochs: 100
+  checkpoint_dir: artifacts/jepa/scaled_v4
+  checkpoint_interval: 10
+  device: cuda
+  drop_last: true
+  mixed_precision: "bf16"
+  pin_memory: true
+  grad_clip:
+    max_norm: 0.5
+    norm_type: 2.0
+  lr_scheduler:
+    name: "cosine"
+    warmup_steps: 2000
+    min_lr_scale: 0.1
+    total_steps: 40000
+  early_stopping:
+    enabled: false
+    patience: 15
+    min_delta: 0.0001
+    mode: min
+
+# ASYMMETRIC AUGMENTATIONS
+# Context gets heavy masking (predict full target from partial context)
+context_augmentations:
+  mask_ratio: 0.5                  # 50% cell masking (I-JEPA uses 75-90%)
+  object_dropout: 0.3              # 30% object dropout
+  random_crop_radius: 1
+  palette_permutation: true
+  gaussian_noise_std: 0.05
+  min_grid_size_for_crop: 8
+  geometric_augmentation: true
+
+# Target gets NO masking (clean prediction targets)
+augmentations:
+  mask_ratio: 0.0                  # NO masking on targets
+  object_dropout: 0.0              # NO object dropout on targets
+  random_crop_radius: 0            # NO cropping on targets
+  palette_permutation: false       # NO color changes on targets
+  gaussian_noise_std: 0.0          # NO noise on targets
+  geometric_augmentation: false    # NO geometric transforms on targets
+
+loss:
+  objective: "sigreg"
+  temperature: 0.07
+  temperature_min: 0.05
+  temperature_max: 0.20
+  learnable_temperature: false
+  queue_size: 8192
+  projection_dim: 512
+  projection_layers: 2
+  projection_activation: "relu"
+  use_target_encoder: false        # L-JEPA: No EMA needed
+  target_ema_decay: 0.99
+
+sigreg:
+  weight: 0.05                     # L-JEPA default
+  num_slices: 1024
+  num_points: 17
+
+logging:
+  enabled: true
+  log_dir: artifacts/jepa/scaled_v4/tensorboard
+  flush_secs: 10
+  run_name: jepa_scaled_v4
+
+diagnostics:
+  embedding_metrics:
+    enabled: true
+    interval: 100
+    max_samples: 4096
+
+# NOTE: Asymmetric masking requires runtime tokenization (not pre-tokenized)
+# because we apply different augmentations to context vs target.
+# The manifest path is used instead of pre_tokenized.
+# This is slower but necessary for asymmetric masking to work.
+
+# pre_tokenized:
+#   path: artifacts/tokenized/curriculum_scaled
+#   shuffle: true
+#   drop_last: true

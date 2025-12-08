@@ -158,6 +158,7 @@ def build_manifest_loader(
         context_window=context_window,
         target_offset=int(data_cfg.get("target_offset", 1)),
         augmentations=config.get("augmentations"),
+        context_augmentations=config.get("context_augmentations"),  # Asymmetric masking
         tokenizer_config=tokenizer_config,
         seed=loader_cfg.get("seed"),
     )

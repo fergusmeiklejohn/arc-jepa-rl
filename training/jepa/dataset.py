@@ -789,6 +789,7 @@ class ManifestTokenizedPairDataset(Dataset):
         context_window: int,
         target_offset: int = 1,
         augmentations: AugmentationConfig | Mapping[str, object] | None = None,
+        context_augmentations: AugmentationConfig | Mapping[str, object] | None = None,
         tokenizer_config: ObjectTokenizerConfig | Mapping[str, object],
         seed: int | None = None,
     ) -> None:
@@ -803,12 +804,22 @@ class ManifestTokenizedPairDataset(Dataset):
         if not self.manifest_path.exists():
             raise FileNotFoundError(f"manifest path does not exist: {self.manifest_path}")
 
+        # Target augmentations (lighter, used for target grids)
         if augmentations is None:
             self.augmentations = AugmentationConfig()
         elif isinstance(augmentations, AugmentationConfig):
             self.augmentations = augmentations
         else:
             self.augmentations = AugmentationConfig.from_mapping(augmentations)
+
+        # Context augmentations (heavier masking for asymmetric prediction)
+        # If not specified, use the same as target augmentations
+        if context_augmentations is None:
+            self.context_augmentations = self.augmentations
+        elif isinstance(context_augmentations, AugmentationConfig):
+            self.context_augmentations = context_augmentations
+        else:
+            self.context_augmentations = AugmentationConfig.from_mapping(context_augmentations)
 
         if isinstance(tokenizer_config, ObjectTokenizerConfig):
             self.tokenizer_config = tokenizer_config
@@ -845,7 +856,9 @@ class ManifestTokenizedPairDataset(Dataset):
             raise ValueError("manifest example is missing temporal context")
 
         rng = self._rng_for_index(index)
-        context_sequence = _augment_sequence(example.context_sequence, self.augmentations, rng)
+        # Use heavier context_augmentations for context (asymmetric masking)
+        context_sequence = _augment_sequence(example.context_sequence, self.context_augmentations, rng)
+        # Use lighter augmentations for target (or no masking for clean prediction targets)
         target_grid = _apply_grid_augmentations(example.target, self.augmentations, rng)
 
         context_features, context_mask, context_adjacency = self._tokenize_context_sequence(context_sequence)
