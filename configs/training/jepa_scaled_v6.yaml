@@ -1,0 +1,141 @@
+# JEPA Scaled V6 - Input→Output Prediction (The Actual ARC Task)
+#
+# FUNDAMENTAL CHANGE: Instead of temporal next-step prediction,
+# predict the OUTPUT grid from the INPUT grid.
+#
+# Why this matters:
+#   - Temporal prediction was too easy (deterministic transformations)
+#   - Input→Output is the actual ARC task we want to solve
+#   - Requires learning transformation rules, not just pattern matching
+#   - This is genuinely uncertain: many possible outputs for an input
+#
+# How it works:
+#   - context_window: 1 (single input grid)
+#   - target_offset: 1 (outputs are stored as "next step")
+#   - Manifest has "input" and "output" fields (already supported)
+#   - Context = masked input, Target = clean output
+#
+# Expected: L2 loss should stay meaningfully above 0 because
+# predicting output from input is a real challenge.
+
+seed: 794
+dataset_manifest: data/curriculum_scaled/manifest.jsonl
+
+data:
+  context_window: 1                # Single input grid (not temporal sequence)
+  target_offset: 1                 # Predict the output
+  shuffle: true
+  validation:
+    split: 0.02
+    seed: 13
+
+tokenizer:
+  max_objects: 16
+  max_color_features: 10
+  background: 0
+  connectivity: 4
+  normalize: true
+  respect_colors: true
+
+object_encoder:
+  hidden_dim: 768
+  num_embeddings: 2048
+  commitment_cost: 0.15
+  ema_decay: 0.95
+  vq_enabled: true
+  vq_refresh_enabled: false
+  vq_refresh_interval: 3000
+  vq_refresh_usage_threshold: 0.01
+  activation: "gelu"
+  relational: true
+  relational_layers: 6
+  relational_heads: 12
+  relational_dropout: 0.1
+
+model:
+  type: "conv"
+  embedding_dim: 1024
+  projection_dim: 256              # Moderate bottleneck (not too small)
+  projection_layers: 2
+
+optimizer:
+  name: "adam"
+  lr: 3.0e-5
+  weight_decay: 1.0e-6
+
+training:
+  batch_size: 512
+  grad_accum_steps: 4
+  num_workers: 8
+  epochs: 100
+  checkpoint_dir: artifacts/jepa/scaled_v6
+  checkpoint_interval: 10
+  device: cuda
+  drop_last: true
+  mixed_precision: "bf16"
+  pin_memory: true
+  grad_clip:
+    max_norm: 0.5
+    norm_type: 2.0
+  lr_scheduler:
+    name: "cosine"
+    warmup_steps: 2000
+    min_lr_scale: 0.1
+    total_steps: 40000
+  early_stopping:
+    enabled: false
+    patience: 15
+    min_delta: 0.0001
+    mode: min
+
+# ASYMMETRIC AUGMENTATIONS
+# Context (input) gets masking - predict full output from partial input
+context_augmentations:
+  mask_ratio: 0.3                  # 30% cell masking on input
+  object_dropout: 0.2              # 20% object dropout on input
+  random_crop_radius: 1
+  palette_permutation: false       # Keep colors consistent for ARC
+  gaussian_noise_std: 0.0
+  min_grid_size_for_crop: 8
+  geometric_augmentation: false    # Don't transform input differently from output
+
+# Target (output) gets NO masking - clean prediction targets
+augmentations:
+  mask_ratio: 0.0
+  object_dropout: 0.0
+  random_crop_radius: 0
+  palette_permutation: false
+  gaussian_noise_std: 0.0
+  geometric_augmentation: false
+
+loss:
+  objective: "sigreg"
+  temperature: 0.07
+  temperature_min: 0.05
+  temperature_max: 0.20
+  learnable_temperature: false
+  queue_size: 8192
+  projection_dim: 256
+  projection_layers: 2
+  projection_activation: "relu"
+  use_target_encoder: false
+  target_ema_decay: 0.99
+
+sigreg:
+  weight: 0.05
+  num_slices: 1024
+  num_points: 17
+
+logging:
+  enabled: true
+  log_dir: artifacts/jepa/scaled_v6/tensorboard
+  flush_secs: 10
+  run_name: jepa_scaled_v6
+
+diagnostics:
+  embedding_metrics:
+    enabled: true
+    interval: 100
+    max_samples: 4096
+
+# Uses manifest for runtime augmentation
