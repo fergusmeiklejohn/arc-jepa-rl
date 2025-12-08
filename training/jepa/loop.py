@@ -460,6 +460,7 @@ class ObjectCentricJEPAExperiment:
             # Compute primary loss based on objective
             if self.loss_config.objective == "sigreg":
                 # L-JEPA style: L2 predictive loss + SIGReg regularization
+                # Formula: (1-λ)L_pred + λ*SIGReg (from L-JEPA paper)
                 # No InfoNCE, no temperature, no queue needed
                 l2_loss = torch.nn.functional.mse_loss(context_proj, target_proj)
                 info_nce_loss = None  # Not used in SIGReg mode
@@ -470,18 +471,18 @@ class ObjectCentricJEPAExperiment:
                 l2_loss = None
                 primary_loss = info_nce_loss
 
-        total_loss = primary_loss
-
         # Invariance loss (only in InfoNCE mode, skip in SIGReg mode for simplicity)
         invariance_loss = None
         if self.loss_config.objective != "sigreg":
+            if primary_loss is not None:
+                total_loss = primary_loss
+            else:
+                total_loss = torch.tensor(0.0, device=self.device)
             invariance_loss = self._token_invariance_loss(batch, context_repr, target_repr)
             if invariance_loss is not None:
                 total_loss = total_loss + invariance_loss
 
-        # Relational loss (only in InfoNCE mode, skip in SIGReg mode)
-        relational_loss = None
-        if self.loss_config.objective != "sigreg":
+            # Relational loss (only in InfoNCE mode, skip in SIGReg mode)
             relational_loss = self._relational_consistency_loss(
                 context_encoding,
                 target_encoding,
@@ -491,12 +492,25 @@ class ObjectCentricJEPAExperiment:
             if relational_loss is not None:
                 total_loss = total_loss + relational_loss
 
-        # SIGReg penalty (applied in both modes, but primary in SIGReg mode)
-        sigreg_penalty = self._sigreg_penalty(context_proj)
-        sigreg_contrib = None
-        if sigreg_penalty is not None and self.sigreg_config.weight != 0.0:
-            sigreg_contrib = self.sigreg_config.weight * sigreg_penalty
-            total_loss = total_loss + sigreg_contrib
+            # SIGReg penalty as auxiliary regularizer in InfoNCE mode
+            sigreg_penalty = self._sigreg_penalty(context_proj)
+            sigreg_contrib = None
+            if sigreg_penalty is not None and self.sigreg_config.weight != 0.0:
+                sigreg_contrib = self.sigreg_config.weight * sigreg_penalty
+                total_loss = total_loss + sigreg_contrib
+        else:
+            # SIGReg mode: Use L-JEPA formula (1-λ)L_pred + λ*SIGReg
+            relational_loss = None
+            sigreg_penalty = self._sigreg_penalty(context_proj)
+            sigreg_contrib = None
+            lambda_weight = self.sigreg_config.weight
+
+            if sigreg_penalty is not None and lambda_weight != 0.0:
+                # L-JEPA formula: (1-λ)*L2 + λ*SIGReg
+                sigreg_contrib = lambda_weight * sigreg_penalty
+                total_loss = (1.0 - lambda_weight) * primary_loss + sigreg_contrib
+            else:
+                total_loss = primary_loss
 
         self._record_loss_components(
             info_nce=info_nce_loss,
