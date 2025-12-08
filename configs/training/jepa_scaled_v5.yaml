@@ -1,0 +1,137 @@
+# JEPA Scaled V5 - Information Bottleneck + Longer Prediction
+#
+# Problem from V4: Loss still plateaus at 0.02016 because:
+#   - Same encoder for context and target → similar inputs → similar outputs
+#   - Temporal redundancy makes next-step prediction trivial
+#   - Masking grid cells doesn't help if the encoder still sees patterns
+#
+# Solution: Two-pronged attack
+#   1. INFORMATION BOTTLENECK: projection_dim 512 → 64
+#      - Forces compression, makes reconstruction harder
+#      - Model must learn essential features, not just copy
+#   2. LONGER PREDICTION: target_offset 1 → 3
+#      - Predict 3 steps ahead, not 1
+#      - More temporal distance = harder prediction
+#   3. Keep asymmetric masking from V4
+#
+# Expected: L2 loss should stay meaningfully above 0
+
+seed: 793
+dataset_manifest: data/curriculum_scaled/manifest.jsonl
+
+data:
+  context_window: 3
+  target_offset: 3                 # CHANGED: 1 → 3 (predict further ahead)
+  shuffle: true
+  validation:
+    split: 0.02
+    seed: 13
+
+tokenizer:
+  max_objects: 16
+  max_color_features: 10
+  background: 0
+  connectivity: 4
+  normalize: true
+  respect_colors: true
+
+object_encoder:
+  hidden_dim: 768
+  num_embeddings: 2048
+  commitment_cost: 0.15
+  ema_decay: 0.95
+  vq_enabled: true
+  vq_refresh_enabled: false
+  vq_refresh_interval: 3000
+  vq_refresh_usage_threshold: 0.01
+  activation: "gelu"
+  relational: true
+  relational_layers: 6
+  relational_heads: 12
+  relational_dropout: 0.1
+
+model:
+  type: "conv"
+  embedding_dim: 1024
+  projection_dim: 64               # CHANGED: 512 → 64 (8x smaller bottleneck)
+  projection_layers: 2
+
+optimizer:
+  name: "adam"
+  lr: 3.0e-5
+  weight_decay: 1.0e-6
+
+training:
+  batch_size: 512
+  grad_accum_steps: 4
+  num_workers: 8
+  epochs: 100
+  checkpoint_dir: artifacts/jepa/scaled_v5
+  checkpoint_interval: 10
+  device: cuda
+  drop_last: true
+  mixed_precision: "bf16"
+  pin_memory: true
+  grad_clip:
+    max_norm: 0.5
+    norm_type: 2.0
+  lr_scheduler:
+    name: "cosine"
+    warmup_steps: 2000
+    min_lr_scale: 0.1
+    total_steps: 40000
+  early_stopping:
+    enabled: false
+    patience: 15
+    min_delta: 0.0001
+    mode: min
+
+# ASYMMETRIC AUGMENTATIONS (from V4)
+context_augmentations:
+  mask_ratio: 0.5
+  object_dropout: 0.3
+  random_crop_radius: 1
+  palette_permutation: true
+  gaussian_noise_std: 0.05
+  min_grid_size_for_crop: 8
+  geometric_augmentation: true
+
+augmentations:
+  mask_ratio: 0.0
+  object_dropout: 0.0
+  random_crop_radius: 0
+  palette_permutation: false
+  gaussian_noise_std: 0.0
+  geometric_augmentation: false
+
+loss:
+  objective: "sigreg"
+  temperature: 0.07
+  temperature_min: 0.05
+  temperature_max: 0.20
+  learnable_temperature: false
+  queue_size: 8192
+  projection_dim: 64               # CHANGED: Match model.projection_dim
+  projection_layers: 2
+  projection_activation: "relu"
+  use_target_encoder: false
+  target_ema_decay: 0.99
+
+sigreg:
+  weight: 0.05
+  num_slices: 1024
+  num_points: 17
+
+logging:
+  enabled: true
+  log_dir: artifacts/jepa/scaled_v5/tensorboard
+  flush_secs: 10
+  run_name: jepa_scaled_v5
+
+diagnostics:
+  embedding_metrics:
+    enabled: true
+    interval: 100
+    max_samples: 4096
+
+# Uses manifest for runtime augmentation (asymmetric masking)
