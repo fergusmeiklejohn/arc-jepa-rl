@@ -49,21 +49,30 @@ def convert_arcgen_to_manifest(input_dir: Path, output_path: Path) -> int:
                 else:
                     examples = [data]
     else:
-        # Directory of files
+        # Directory of files - ARC-GEN format: one JSON file per task
+        # Filename is the task_id (e.g., 007bbfb7.json)
         for json_file in sorted(input_dir.glob('**/*.json')):
+            task_id = json_file.stem  # Get filename without extension
             with open(json_file) as f:
                 data = json.load(f)
                 if isinstance(data, list):
-                    examples.extend(data)
+                    # Each item is {input, output} - add task_id
+                    for item in data:
+                        item['task_id'] = task_id
+                        examples.append(item)
                 else:
+                    data['task_id'] = task_id
                     examples.append(data)
 
         # Also check for JSONL files
         for jsonl_file in sorted(input_dir.glob('**/*.jsonl')):
+            task_id = jsonl_file.stem
             with open(jsonl_file) as f:
                 for line in f:
                     if line.strip():
-                        examples.append(json.loads(line))
+                        item = json.loads(line)
+                        item['task_id'] = task_id
+                        examples.append(item)
 
     if not examples:
         print(f"Error: No examples found in {input_dir}", file=sys.stderr)
