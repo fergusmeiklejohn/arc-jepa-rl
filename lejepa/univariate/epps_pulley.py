@@ -29,7 +29,7 @@ class EppsPulley(UnivariateTest):
 
     Args:
         t_max (float, optional): Maximum integration point for linear spacing methods.
-            Only used for 'trapezoid' and 'simpson' integration. Default: 3.
+            Only used for 'trapezoid' and 'simpson' integration. Default: 5 (per L-JEPA paper).
         n_points (int, optional): Number of integration points. Must be odd for
             'simpson' integration. For 'gauss-hermite', this determines the number
             of positive nodes. Default: 17.
@@ -60,7 +60,7 @@ class EppsPulley(UnivariateTest):
     """
 
     def __init__(
-        self, t_max: float = 3, n_points: int = 17, integration: str = "trapezoid"
+        self, t_max: float = 5, n_points: int = 17, integration: str = "trapezoid"
     ):
         super().__init__()
         assert n_points % 2 == 1
@@ -99,10 +99,13 @@ class EppsPulley(UnivariateTest):
         return (err @ self.weights) * N * self.world_size
 
 
-class EppsPulley(UnivariateTest):
+class EppsPulleyReference(UnivariateTest):
     """
-    PyTorch implementation of the Epps-Pulley test for univariate normality
-    based on empirical characteristic function.
+    Reference implementation of the Epps-Pulley test for univariate normality.
+
+    NOTE: This is a slower reference implementation. Use EppsPulley (above) for
+    production training - it has precomputed weights, DDP support, and proper
+    N-scaling as specified in the L-JEPA paper.
     """
 
     def __init__(self, t_range=(-3, 3), n_points=10, weight_type="gaussian"):

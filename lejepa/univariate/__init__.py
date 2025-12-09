@@ -6,7 +6,7 @@ from .watson import Watson
 from .moments import Moments
 from .likelihood import NLL
 from .jarque_bera import ExtendedJarqueBera, VCReg
-from .epps_pulley import EppsPulley, EppsPulley
+from .epps_pulley import EppsPulley, EppsPulleyReference
 from .base import UnivariateTest
 
 __all__ = [
@@ -19,6 +19,6 @@ __all__ = [
     ExtendedJarqueBera,
     VCReg,
     EppsPulley,
-    EppsPulley,
+    EppsPulleyReference,
     UnivariateTest,
 ]
