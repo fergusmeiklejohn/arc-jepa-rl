@@ -10,3 +10,4 @@ __pycache__/
 temp/
 .venv_tmp/*
 .venv_tmp/lib/python3.12/site-packages/distutils-precedence.pth
+data/arc_gen_100k/arc-gen-100k-dataset/
