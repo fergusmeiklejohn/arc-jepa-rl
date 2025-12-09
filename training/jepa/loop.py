@@ -25,6 +25,7 @@ from .relational_loss import RelationalConsistencyConfig, relational_consistency
 from .trainer import ObjectCentricJEPATrainer
 from .object_pipeline import ObjectCentricEncoding, ObjectCentricJEPAEncoder, ObjectTokenBatch
 from .sigreg import SIGRegLoss, SIGRegLossConfig
+from .vicreg import VICRegConfig, VICRegLoss
 
 from training.modules.projection import InfoNCEQueue, JEPAPredictor, ProjectionHead
 from training.utils.optimization import (
@@ -210,6 +211,7 @@ class ObjectCentricJEPAExperiment:
         self.invariance_config = InvarianceLossConfig.from_mapping(config.get("invariance"))
         self.relational_config = RelationalConsistencyConfig.from_mapping(config.get("relational_loss"))
         self.sigreg_config = SIGRegLossConfig.from_mapping(config.get("sigreg"))
+        self.vicreg_config = VICRegConfig.from_mapping(config.get("vicreg"))
 
         embedding_dim = self.trainer.encoder_config.hidden_dim
         self.projection_head = ProjectionHead(
@@ -230,6 +232,16 @@ class ObjectCentricJEPAExperiment:
                 num_slices=self.sigreg_config.num_slices,
                 num_points=self.sigreg_config.num_points,
             ).to(self.device)
+
+        self._vicreg_loss_module: VICRegLoss | None = None
+        if self.vicreg_config.enabled:
+            self._vicreg_loss_module = VICRegLoss(
+                variance_weight=self.vicreg_config.variance_weight,
+                covariance_weight=self.vicreg_config.covariance_weight,
+                variance_target=self.vicreg_config.variance_target,
+                variance_epsilon=self.vicreg_config.variance_epsilon,
+            ).to(self.device)
+
         self._target_encoder = None
         self._target_object_encoder = None
         self._target_projection_head = None
@@ -516,12 +528,17 @@ class ObjectCentricJEPAExperiment:
         relational_loss = None
         sigreg_penalty = None
         sigreg_contrib = None
+        vicreg_loss = None
 
         if self.loss_config.objective == "ijepa":
-            # I-JEPA mode: Pure L2 prediction loss
-            # No invariance, no relational, no SIGReg needed
-            # The asymmetry (predictor + EMA target) prevents collapse
+            # I-JEPA mode: L2 prediction loss + VICReg regularization
+            # VICReg prevents collapse by enforcing variance and decorrelation
             total_loss = primary_loss
+
+            # Apply VICReg to target embeddings to prevent collapse
+            vicreg_loss = self._vicreg_penalty(target_repr)
+            if vicreg_loss is not None:
+                total_loss = total_loss + vicreg_loss
 
         elif self.loss_config.objective == "sigreg":
             # SIGReg mode: Use L-JEPA formula (1-λ)L_pred + λ*SIGReg
@@ -569,6 +586,7 @@ class ObjectCentricJEPAExperiment:
             invariance=invariance_loss,
             relational=relational_loss,
             l2_loss=l2_loss,
+            vicreg=vicreg_loss,
         )
         self._record_embedding_metrics(
             context_proj,
@@ -1162,6 +1180,11 @@ class ObjectCentricJEPAExperiment:
             return None
         return self._sigreg_loss_module(context_proj)
 
+    def _vicreg_penalty(self, embeddings: torch.Tensor) -> torch.Tensor | None:
+        if self._vicreg_loss_module is None:
+            return None
+        return self._vicreg_loss_module(embeddings)
+
     def _record_loss_components(
         self,
         *,
@@ -1172,6 +1195,7 @@ class ObjectCentricJEPAExperiment:
         invariance: torch.Tensor | None = None,
         relational: torch.Tensor | None = None,
         l2_loss: torch.Tensor | None = None,
+        vicreg: torch.Tensor | None = None,
     ) -> None:
         if not self._metrics_enabled:
             return
@@ -1183,7 +1207,7 @@ class ObjectCentricJEPAExperiment:
         # info_nce is None in SIGReg-primary mode
         if info_nce is not None:
             event["info_nce"] = float(info_nce.detach().float().cpu().item())
-        # l2_loss is used in SIGReg-primary mode
+        # l2_loss is used in SIGReg-primary and I-JEPA mode
         if l2_loss is not None:
             event["l2_loss"] = float(l2_loss.detach().float().cpu().item())
         if sigreg_weighted is not None:
@@ -1194,6 +1218,8 @@ class ObjectCentricJEPAExperiment:
             event["invariance"] = float(invariance.detach().float().cpu().item())
         if relational is not None:
             event["relational"] = float(relational.detach().float().cpu().item())
+        if vicreg is not None:
+            event["vicreg"] = float(vicreg.detach().float().cpu().item())
         self._loss_events.append(event)
         self._loss_step += 1
 

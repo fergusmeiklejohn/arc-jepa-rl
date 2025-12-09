@@ -1,0 +1,151 @@
+# JEPA V10 - I-JEPA with VICReg Regularization
+#
+# KEY INSIGHT from V8/V9:
+#   Both versions showed LEARNING initially (loss dropped to ~0.06-0.09)
+#   Then the loss INCREASED, showing the predictor finding a trivial solution
+#   (output near-constant that matches mean of targets, then drift diverges)
+#
+# The problem: Nothing forces target embeddings to be DIVERSE
+#   - Predictor finds average that minimizes L2 to mean target
+#   - EMA target drifts, predictor can't track -> loss rises
+#
+# VICReg (Variance-Invariance-Covariance Regularization) fixes this:
+#   - VARIANCE: Each embedding dimension must have std >= 1.0
+#     -> Prevents constant outputs (the collapse mode we saw)
+#   - COVARIANCE: Embedding dimensions must be decorrelated
+#     -> Prevents redundant dimensions (better use of capacity)
+#
+# This is what Yann LeCun would actually recommend:
+#   "The key is to prevent informational collapse, not just avoid
+#    the trivial solution. VICReg does this explicitly."
+#
+# Reference: Bardes et al. "VICReg: Variance-Invariance-Covariance
+#            Regularization for Self-Supervised Learning" (ICLR 2022)
+
+seed: 798
+dataset_manifest: data/arc_gen_100k/manifest.jsonl
+
+data:
+  context_window: 1
+  target_offset: 1
+  shuffle: true
+  validation:
+    split: 0.05
+    seed: 42
+
+tokenizer:
+  max_objects: 16
+  max_color_features: 10
+  background: 0
+  connectivity: 4
+  normalize: true
+  respect_colors: true
+
+object_encoder:
+  hidden_dim: 768
+  num_embeddings: 2048
+  commitment_cost: 0.15
+  ema_decay: 0.95
+  vq_enabled: true
+  vq_refresh_enabled: false
+  activation: "gelu"
+  relational: true
+  relational_layers: 6
+  relational_heads: 12
+  relational_dropout: 0.1
+
+model:
+  type: "conv"
+  embedding_dim: 1024
+  projection_dim: 256
+  projection_layers: 2
+
+optimizer:
+  name: "adam"
+  lr: 1.0e-4                         # Back to higher LR - VICReg stabilizes
+  weight_decay: 1.0e-6
+
+training:
+  batch_size: 256
+  grad_accum_steps: 4
+  num_workers: 8
+  epochs: 200
+  checkpoint_dir: artifacts/jepa/ijepa_v10
+  checkpoint_interval: 20
+  device: cuda
+  drop_last: true
+  mixed_precision: "bf16"
+  pin_memory: true
+  grad_clip:
+    max_norm: 1.0                    # Standard clipping
+    norm_type: 2.0
+  lr_scheduler:
+    name: "cosine"
+    warmup_steps: 1000
+    min_lr_scale: 0.1
+    total_steps: 20000
+  early_stopping:
+    enabled: true
+    patience: 40
+    min_delta: 0.0001
+    mode: min
+
+# Moderate masking - not too aggressive
+context_augmentations:
+  mask_ratio: 0.4
+  object_dropout: 0.4
+  random_crop_radius: 0
+  palette_permutation: false
+  gaussian_noise_std: 0.0
+  geometric_augmentation: false
+
+# Target still gets NO masking
+augmentations:
+  mask_ratio: 0.0
+  object_dropout: 0.0
+  random_crop_radius: 0
+  palette_permutation: false
+  gaussian_noise_std: 0.0
+  geometric_augmentation: false
+
+loss:
+  objective: "ijepa"
+  temperature: 0.07
+  temperature_min: 0.05
+  temperature_max: 0.20
+  learnable_temperature: false
+  queue_size: 4096
+  projection_dim: 256
+  projection_layers: 2
+  projection_activation: "relu"
+  use_target_encoder: true
+  target_ema_decay: 0.996            # Standard I-JEPA decay
+  predictor_depth: 6
+  predictor_hidden_dim: 512
+
+# VICReg - THE KEY ADDITION
+# Prevents collapse by forcing embedding diversity
+vicreg:
+  enabled: true
+  variance_weight: 25.0              # Strong variance enforcement (VICReg paper uses 25)
+  covariance_weight: 1.0             # Decorrelation (VICReg paper uses 1)
+  variance_target: 1.0               # Target std dev per dimension
+  regularize_target: true            # Apply to EMA target embeddings
+
+# Disable SIGReg - VICReg handles regularization
+sigreg:
+  weight: 0.0
+  num_slices: 1024
+  num_points: 17
+
+logging:
+  enabled: true
+  log_dir: artifacts/jepa/ijepa_v10/tensorboard
+  flush_secs: 10
+  run_name: jepa_ijepa_v10
+
+diagnostics:
+  embedding_metrics:
+    enabled: true
+    interval: 50
+    max_samples: 4096
