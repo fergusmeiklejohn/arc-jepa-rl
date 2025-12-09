@@ -1,0 +1,157 @@
+# JEPA V11 - Pure L-JEPA with SIGReg Regularization
+#
+# PROBLEM FROM V10:
+#   VICReg loss exploded from 20 to 734 MILLION over 43 epochs.
+#   VICReg only matches first 2 moments (mean, variance) which is
+#   proven insufficient by the L-JEPA paper (Theorem 3).
+#
+# SOLUTION (from L-JEPA paper arXiv 2511.08544):
+#   SIGReg (Sketched Isotropic Gaussian Regularization):
+#   - Matches ENTIRE distribution via characteristic function comparison
+#   - Epps-Pulley test has bounded gradients: |dEP/dz| <= 4*sigma^2/N
+#   - Single hyperparameter lambda instead of dozens
+#   - No teacher-student, no EMA, no stop-gradient needed
+#
+# KEY FORMULA:
+#   Loss = (1-lambda)*L2_prediction + lambda*SIGReg
+#   where lambda = 0.05 (recommended by paper)
+#
+# Reference: "Provable and Scalable Self-Supervised Learning Without the Heuristics"
+#            Balestriero et al., arXiv 2511.08544 (2025)
+
+seed: 799
+dataset_manifest: data/arc_gen_100k/manifest.jsonl
+
+data:
+  context_window: 1
+  target_offset: 1
+  shuffle: true
+  validation:
+    split: 0.05
+    seed: 42
+
+tokenizer:
+  max_objects: 16
+  max_color_features: 10
+  background: 0
+  connectivity: 4
+  normalize: true
+  respect_colors: true
+
+object_encoder:
+  hidden_dim: 768
+  num_embeddings: 2048
+  commitment_cost: 0.15
+  ema_decay: 0.95
+  vq_enabled: true
+  vq_refresh_enabled: false
+  activation: "gelu"
+  relational: true
+  relational_layers: 6
+  relational_heads: 12
+  relational_dropout: 0.1
+
+model:
+  type: "conv"
+  embedding_dim: 1024
+  projection_dim: 256
+  projection_layers: 2
+
+optimizer:
+  name: "adam"
+  lr: 1.0e-4
+  weight_decay: 1.0e-6
+
+training:
+  batch_size: 256
+  grad_accum_steps: 4
+  num_workers: 8
+  epochs: 200
+  checkpoint_dir: artifacts/jepa/lejepa_v11
+  checkpoint_interval: 20
+  device: cuda
+  drop_last: true
+  mixed_precision: "bf16"
+  pin_memory: true
+  grad_clip:
+    max_norm: 1.0
+    norm_type: 2.0
+  lr_scheduler:
+    name: "cosine"
+    warmup_steps: 1000
+    min_lr_scale: 0.1
+    total_steps: 20000
+  early_stopping:
+    enabled: true
+    patience: 40
+    min_delta: 0.0001
+    mode: min
+
+# Moderate masking for context
+context_augmentations:
+  mask_ratio: 0.4
+  object_dropout: 0.4
+  random_crop_radius: 0
+  palette_permutation: false
+  gaussian_noise_std: 0.0
+  geometric_augmentation: false
+
+# Target gets NO masking
+augmentations:
+  mask_ratio: 0.0
+  object_dropout: 0.0
+  random_crop_radius: 0
+  palette_permutation: false
+  gaussian_noise_std: 0.0
+  geometric_augmentation: false
+
+loss:
+  # L-JEPA objective: Direct L2 prediction + SIGReg regularization
+  # No InfoNCE, no temperature, no queue, no predictor network
+  objective: "sigreg"
+
+  # These are not used in sigreg mode but kept for config compatibility
+  temperature: 0.07
+  temperature_min: 0.05
+  temperature_max: 0.20
+  learnable_temperature: false
+  queue_size: 4096
+  projection_dim: 256
+  projection_layers: 2
+  projection_activation: "relu"
+
+  # No target encoder needed with SIGReg
+  use_target_encoder: false
+  target_ema_decay: 0.996
+
+  # No predictor network needed - direct L2 prediction
+  predictor_depth: 0
+  predictor_hidden_dim: 0
+
+# SIGReg - THE KEY COMPONENT
+# Enforces isotropic Gaussian distribution on embeddings
+# via Epps-Pulley characteristic function test
+sigreg:
+  weight: 0.05         # lambda from L-JEPA paper (trade-off parameter)
+  num_slices: 1024     # Number of random projections (paper uses 1024)
+  num_points: 17       # Integration points for Epps-Pulley (paper uses 17)
+
+# VICReg DISABLED - this was causing the explosion
+vicreg:
+  enabled: false
+  variance_weight: 0.0
+  covariance_weight: 0.0
+  variance_target: 1.0
+  regularize_target: false
+
+logging:
+  enabled: true
+  log_dir: artifacts/jepa/lejepa_v11/tensorboard
+  flush_secs: 10
+  run_name: jepa_lejepa_v11
+
+diagnostics:
+  embedding_metrics:
+    enabled: true
+    interval: 50
+    max_samples: 4096

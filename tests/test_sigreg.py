@@ -30,3 +30,39 @@ def test_sigreg_rejects_non_matrix_inputs():
     loss_fn = SIGRegLoss(num_slices=4, num_points=5)
     with pytest.raises(ValueError):
         loss_fn(torch.randn(6))
+
+
+def test_sigreg_detects_collapse():
+    """SIGReg should penalize collapsed embeddings more than Gaussian ones.
+
+    This test verifies the L-JEPA paper insight: SIGReg encourages isotropic
+    Gaussian distribution, so collapsed/non-Gaussian embeddings get higher penalty.
+    """
+    torch.manual_seed(42)
+    loss_fn = SIGRegLoss(num_slices=128, num_points=17)
+
+    # Perfect isotropic Gaussian - should have LOW penalty
+    gaussian = torch.randn(256, 64)
+    gaussian_penalty = loss_fn(gaussian)
+
+    # Complete collapse (all identical) - should have HIGH penalty
+    collapsed = torch.ones(256, 64) * 5.0
+    collapsed_penalty = loss_fn(collapsed)
+
+    # Bimodal (two clusters) - should have HIGH penalty (not Gaussian)
+    bimodal = torch.cat([torch.randn(128, 64) + 5, torch.randn(128, 64) - 5])
+    bimodal_penalty = loss_fn(bimodal)
+
+    # Verify the ordering
+    assert gaussian_penalty < collapsed_penalty, (
+        f"Gaussian ({gaussian_penalty:.4f}) should have lower penalty than "
+        f"collapsed ({collapsed_penalty:.4f})"
+    )
+    assert gaussian_penalty < bimodal_penalty, (
+        f"Gaussian ({gaussian_penalty:.4f}) should have lower penalty than "
+        f"bimodal ({bimodal_penalty:.4f})"
+    )
+    # Gaussian penalty should be very small (close to 0)
+    assert gaussian_penalty < 0.1, (
+        f"Gaussian penalty ({gaussian_penalty:.4f}) should be < 0.1"
+    )

@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import Mapping
 
 import torch
-import torch.nn.functional as F
 
 from lejepa.multivariate import SlicingUnivariateTest
 from lejepa.univariate import EppsPulley
@@ -57,6 +56,10 @@ class SIGRegLoss(torch.nn.Module):
         """
         Compute the SIGReg penalty for a batch of embeddings.
 
+        The L-JEPA paper compares against a standard isotropic Gaussian N(0, I).
+        We standardize embeddings (z-score) rather than L2-normalizing, so that
+        the Epps-Pulley test can detect deviations from Gaussian distribution.
+
         Args:
             embeddings: Tensor with shape (batch, dim).
 
@@ -67,9 +70,13 @@ class SIGRegLoss(torch.nn.Module):
             raise ValueError("expected embeddings with shape (batch, dim)")
 
         flat = embeddings.reshape(-1, embeddings.size(-1))
-        normalized = F.normalize(flat, dim=-1)
-        normalized = normalized.to(torch.float32)
-        penalty = self._sliced_test(normalized)
+        # Standardize to z-scores (mean=0, std=1 per dimension)
+        # This is what L-JEPA paper does - NOT L2 normalization
+        mean = flat.mean(dim=0, keepdim=True)
+        std = flat.std(dim=0, keepdim=True) + 1e-8
+        standardized = (flat - mean) / std
+        standardized = standardized.to(torch.float32)
+        penalty = self._sliced_test(standardized)
         if penalty.dim() != 0:
             penalty = penalty.mean()
         return penalty
