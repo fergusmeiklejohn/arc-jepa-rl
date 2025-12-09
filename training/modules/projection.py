@@ -47,6 +47,66 @@ if torch is not None:  # pragma: no branch
             return F.normalize(out, dim=-1)
 
 
+    class JEPAPredictor(nn.Module):
+        """Predictor network for I-JEPA style asymmetric prediction.
+
+        The predictor transforms context representations to predict target
+        representations. This is the key component that prevents collapse
+        in JEPA - the predictor must do actual work since context is masked
+        and cannot simply copy to match the target.
+
+        Architecture follows I-JEPA: narrow MLP with skip connection.
+        """
+
+        def __init__(
+            self,
+            input_dim: int,
+            hidden_dim: int | None = None,
+            output_dim: int | None = None,
+            depth: int = 4,
+            activation: str = "gelu",
+        ) -> None:
+            super().__init__()
+
+            if hidden_dim is None:
+                hidden_dim = input_dim
+            if output_dim is None:
+                output_dim = input_dim
+
+            self.input_dim = input_dim
+            self.output_dim = output_dim
+
+            acts: dict[str, nn.Module] = {
+                "relu": nn.ReLU(),
+                "gelu": nn.GELU(),
+                "tanh": nn.Tanh(),
+            }
+            if activation not in acts:
+                raise ValueError(f"activation must be one of {list(acts.keys())}")
+
+            # Input projection
+            self.input_proj = nn.Linear(input_dim, hidden_dim)
+
+            # Transformer-like blocks (simplified)
+            layers = []
+            for _ in range(depth):
+                layers.append(nn.Linear(hidden_dim, hidden_dim))
+                layers.append(nn.LayerNorm(hidden_dim))
+                layers.append(acts[activation])
+            self.layers = nn.Sequential(*layers)
+
+            # Output projection
+            self.output_proj = nn.Linear(hidden_dim, output_dim)
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            """Predict target representation from context representation."""
+            h = self.input_proj(x)
+            h = self.layers(h)
+            out = self.output_proj(h)
+            # Don't normalize - we want to match the target embedding directly
+            return out
+
+
     class InfoNCEQueue(nn.Module):
         def __init__(self, embedding_dim: int, queue_size: int) -> None:
             super().__init__()
@@ -95,6 +155,10 @@ else:  # pragma: no cover
     class ProjectionHead:  # type: ignore[misc]
         def __init__(self, *args, **kwargs) -> None:  # noqa: D401
             raise ProjectionModuleUnavailable("PyTorch is required for ProjectionHead")
+
+    class JEPAPredictor:  # type: ignore[misc]
+        def __init__(self, *args, **kwargs) -> None:  # noqa: D401
+            raise ProjectionModuleUnavailable("PyTorch is required for JEPAPredictor")
 
     class InfoNCEQueue:  # type: ignore[misc]
         def __init__(self, *args, **kwargs) -> None:  # noqa: D401

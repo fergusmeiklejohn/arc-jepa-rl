@@ -26,7 +26,7 @@ from .trainer import ObjectCentricJEPATrainer
 from .object_pipeline import ObjectCentricEncoding, ObjectCentricJEPAEncoder, ObjectTokenBatch
 from .sigreg import SIGRegLoss, SIGRegLossConfig
 
-from training.modules.projection import InfoNCEQueue, ProjectionHead
+from training.modules.projection import InfoNCEQueue, JEPAPredictor, ProjectionHead
 from training.utils.optimization import (
     GradientClippingConfig,
     LRSchedulerConfig,
@@ -82,7 +82,7 @@ class OptimizerConfig:
 
 @dataclass(frozen=True)
 class InfoNCELossConfig:
-    objective: str = "infonce"  # "infonce" or "sigreg" (L-JEPA style)
+    objective: str = "infonce"  # "infonce", "sigreg", or "ijepa" (I-JEPA style with predictor)
     temperature: float = 0.1
     temperature_init: float = 0.1
     temperature_min: float = 0.05
@@ -94,6 +94,9 @@ class InfoNCELossConfig:
     projection_activation: str = "relu"
     use_target_encoder: bool = False
     target_ema_decay: float = 0.99
+    # I-JEPA predictor settings
+    predictor_depth: int = 4
+    predictor_hidden_dim: int | None = None  # None = same as embedding_dim
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, object] | None) -> "InfoNCELossConfig":
@@ -118,8 +121,11 @@ class InfoNCELossConfig:
         if temperature_value <= 0:
             raise ValueError("temperature must be positive")
         objective = str(data.get("objective", cls.objective)).lower()
-        if objective not in ("infonce", "sigreg"):
-            raise ValueError(f"objective must be 'infonce' or 'sigreg', got '{objective}'")
+        if objective not in ("infonce", "sigreg", "ijepa"):
+            raise ValueError(f"objective must be 'infonce', 'sigreg', or 'ijepa', got '{objective}'")
+        # Parse predictor settings
+        predictor_hidden = data.get("predictor_hidden_dim")
+        predictor_hidden_dim = int(predictor_hidden) if predictor_hidden is not None else None
         return cls(
             objective=objective,
             temperature=temperature_value,
@@ -133,6 +139,8 @@ class InfoNCELossConfig:
             projection_activation=str(data.get("projection_activation", cls.projection_activation)),
             use_target_encoder=bool(data.get("use_target_encoder", cls.use_target_encoder)),
             target_ema_decay=float(data.get("target_ema_decay", cls.target_ema_decay)),
+            predictor_depth=int(data.get("predictor_depth", cls.predictor_depth)),
+            predictor_hidden_dim=predictor_hidden_dim,
         )
 
     @property
@@ -225,6 +233,21 @@ class ObjectCentricJEPAExperiment:
         self._target_encoder = None
         self._target_object_encoder = None
         self._target_projection_head = None
+
+        # I-JEPA predictor for asymmetric prediction
+        self._predictor: JEPAPredictor | None = None
+        if self.loss_config.objective == "ijepa":
+            # For I-JEPA, we MUST use target encoder with stop-gradient
+            self._use_target_encoder = True
+            predictor_hidden = self.loss_config.predictor_hidden_dim or embedding_dim
+            self._predictor = JEPAPredictor(
+                input_dim=embedding_dim,
+                hidden_dim=predictor_hidden,
+                output_dim=embedding_dim,  # Predict in embedding space, not projection space
+                depth=self.loss_config.predictor_depth,
+                activation="gelu",
+            ).to(self.device)
+
         if self._use_target_encoder:
             self._build_target_network()
 
@@ -254,6 +277,8 @@ class ObjectCentricJEPAExperiment:
             + list(self.projection_head.parameters())
             + list(self.context_attention.parameters())
         )
+        if self._predictor is not None:
+            params = params + list(self._predictor.parameters())
         if self.loss_config.learnable_temperature:
             params.append(self.log_temperature)
 
@@ -458,7 +483,22 @@ class ObjectCentricJEPAExperiment:
                 target_proj = self.projection_head(target_repr)
 
             # Compute primary loss based on objective
-            if self.loss_config.objective == "sigreg":
+            if self.loss_config.objective == "ijepa":
+                # I-JEPA style: Predictor transforms context to predict target
+                # Key insight: predictor works in EMBEDDING space, not projection space
+                # Target is stop-gradient (handled by _use_target_encoder)
+                assert self._predictor is not None, "I-JEPA requires predictor"
+
+                # Predictor: context_repr -> predicted_target_repr
+                predicted_target = self._predictor(context_repr)
+
+                # L2 loss between predicted and actual target (in embedding space)
+                # Target comes from EMA encoder with stop-gradient
+                l2_loss = torch.nn.functional.mse_loss(predicted_target, target_repr.detach())
+                info_nce_loss = None
+                primary_loss = l2_loss
+
+            elif self.loss_config.objective == "sigreg":
                 # L-JEPA style: L2 predictive loss + SIGReg regularization
                 # Formula: (1-λ)L_pred + λ*SIGReg (from L-JEPA paper)
                 # No InfoNCE, no temperature, no queue needed
@@ -471,9 +511,32 @@ class ObjectCentricJEPAExperiment:
                 l2_loss = None
                 primary_loss = info_nce_loss
 
-        # Invariance loss (only in InfoNCE mode, skip in SIGReg mode for simplicity)
+        # Invariance loss (only in InfoNCE mode, skip in SIGReg/I-JEPA mode)
         invariance_loss = None
-        if self.loss_config.objective != "sigreg":
+        relational_loss = None
+        sigreg_penalty = None
+        sigreg_contrib = None
+
+        if self.loss_config.objective == "ijepa":
+            # I-JEPA mode: Pure L2 prediction loss
+            # No invariance, no relational, no SIGReg needed
+            # The asymmetry (predictor + EMA target) prevents collapse
+            total_loss = primary_loss
+
+        elif self.loss_config.objective == "sigreg":
+            # SIGReg mode: Use L-JEPA formula (1-λ)L_pred + λ*SIGReg
+            sigreg_penalty = self._sigreg_penalty(context_proj)
+            lambda_weight = self.sigreg_config.weight
+
+            if sigreg_penalty is not None and lambda_weight != 0.0:
+                # L-JEPA formula: (1-λ)*L2 + λ*SIGReg
+                sigreg_contrib = lambda_weight * sigreg_penalty
+                total_loss = (1.0 - lambda_weight) * primary_loss + sigreg_contrib
+            else:
+                total_loss = primary_loss
+
+        else:
+            # InfoNCE mode
             if primary_loss is not None:
                 total_loss = primary_loss
             else:
@@ -482,7 +545,7 @@ class ObjectCentricJEPAExperiment:
             if invariance_loss is not None:
                 total_loss = total_loss + invariance_loss
 
-            # Relational loss (only in InfoNCE mode, skip in SIGReg mode)
+            # Relational loss
             relational_loss = self._relational_consistency_loss(
                 context_encoding,
                 target_encoding,
@@ -492,25 +555,11 @@ class ObjectCentricJEPAExperiment:
             if relational_loss is not None:
                 total_loss = total_loss + relational_loss
 
-            # SIGReg penalty as auxiliary regularizer in InfoNCE mode
+            # SIGReg penalty as auxiliary regularizer
             sigreg_penalty = self._sigreg_penalty(context_proj)
-            sigreg_contrib = None
             if sigreg_penalty is not None and self.sigreg_config.weight != 0.0:
                 sigreg_contrib = self.sigreg_config.weight * sigreg_penalty
                 total_loss = total_loss + sigreg_contrib
-        else:
-            # SIGReg mode: Use L-JEPA formula (1-λ)L_pred + λ*SIGReg
-            relational_loss = None
-            sigreg_penalty = self._sigreg_penalty(context_proj)
-            sigreg_contrib = None
-            lambda_weight = self.sigreg_config.weight
-
-            if sigreg_penalty is not None and lambda_weight != 0.0:
-                # L-JEPA formula: (1-λ)*L2 + λ*SIGReg
-                sigreg_contrib = lambda_weight * sigreg_penalty
-                total_loss = (1.0 - lambda_weight) * primary_loss + sigreg_contrib
-            else:
-                total_loss = primary_loss
 
         self._record_loss_components(
             info_nce=info_nce_loss,

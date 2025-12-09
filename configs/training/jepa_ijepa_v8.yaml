@@ -1,0 +1,142 @@
+# JEPA V8 - I-JEPA Style Asymmetric Prediction
+#
+# KEY CHANGES from V7:
+#   1. objective: "ijepa" - Uses predictor network instead of direct L2
+#   2. Heavy context masking (70% object dropout) - Forces predictor to do work
+#   3. EMA target encoder with stop-gradient - Prevents collapse
+#   4. No SIGReg needed - Asymmetry prevents collapse naturally
+#
+# Why this should work:
+#   - V3-V7 all collapsed because context and target could output same constant
+#   - I-JEPA prevents this: predictor sees PARTIAL context, must PREDICT full target
+#   - The predictor cannot simply copy - it must learn structure
+#
+# Architecture:
+#   Context: [heavily masked input] -> Encoder -> Predictor -> predicted_target
+#   Target:  [full output]          -> EMA Encoder (no grad) -> target
+#   Loss: MSE(predicted_target, target)
+#
+# Reference: Assran et al. "Self-Supervised Learning from Images with a
+#            Joint-Embedding Predictive Architecture" (I-JEPA)
+
+seed: 796
+dataset_manifest: data/arc_gen_100k/manifest.jsonl
+
+data:
+  context_window: 1                # Single input grid
+  target_offset: 1                 # Predict output from input
+  shuffle: true
+  validation:
+    split: 0.05
+    seed: 42
+
+tokenizer:
+  max_objects: 16
+  max_color_features: 10
+  background: 0
+  connectivity: 4
+  normalize: true
+  respect_colors: true
+
+object_encoder:
+  hidden_dim: 768
+  num_embeddings: 2048
+  commitment_cost: 0.15
+  ema_decay: 0.95
+  vq_enabled: true
+  vq_refresh_enabled: false
+  activation: "gelu"
+  relational: true
+  relational_layers: 6
+  relational_heads: 12
+  relational_dropout: 0.1
+
+model:
+  type: "conv"
+  embedding_dim: 1024
+  projection_dim: 256
+  projection_layers: 2
+
+optimizer:
+  name: "adam"
+  lr: 1.0e-4                       # Slightly higher LR for predictor
+  weight_decay: 1.0e-6
+
+training:
+  batch_size: 256
+  grad_accum_steps: 4
+  num_workers: 8
+  epochs: 200
+  checkpoint_dir: artifacts/jepa/ijepa_v8
+  checkpoint_interval: 20
+  device: cuda
+  drop_last: true
+  mixed_precision: "bf16"
+  pin_memory: true
+  grad_clip:
+    max_norm: 1.0                  # Slightly higher clip for predictor
+    norm_type: 2.0
+  lr_scheduler:
+    name: "cosine"
+    warmup_steps: 1000
+    min_lr_scale: 0.1
+    total_steps: 20000
+  early_stopping:
+    enabled: true
+    patience: 40                   # More patience - I-JEPA may need longer
+    min_delta: 0.0001
+    mode: min
+
+# HEAVY context masking - this is the key to I-JEPA
+# The context encoder sees very incomplete information
+# The predictor must infer what the full target should be
+context_augmentations:
+  mask_ratio: 0.5                  # Mask 50% of tokens
+  object_dropout: 0.5              # Drop 50% of objects entirely
+  random_crop_radius: 0
+  palette_permutation: false
+  gaussian_noise_std: 0.0
+  geometric_augmentation: false
+
+# Target gets NO masking - predictor must predict the full representation
+augmentations:
+  mask_ratio: 0.0
+  object_dropout: 0.0
+  random_crop_radius: 0
+  palette_permutation: false
+  gaussian_noise_std: 0.0
+  geometric_augmentation: false
+
+loss:
+  objective: "ijepa"               # I-JEPA style with predictor
+  temperature: 0.07                # Not used in I-JEPA but kept for compatibility
+  temperature_min: 0.05
+  temperature_max: 0.20
+  learnable_temperature: false
+  queue_size: 4096                 # Not used in I-JEPA
+  projection_dim: 256
+  projection_layers: 2
+  projection_activation: "relu"
+  use_target_encoder: true         # REQUIRED for I-JEPA
+  target_ema_decay: 0.996          # Slow EMA (I-JEPA uses 0.996-0.999)
+  # Predictor settings
+  predictor_depth: 6               # Deeper predictor for complex transformations
+  predictor_hidden_dim: 512        # Narrower than encoder (bottleneck)
+
+# No SIGReg needed - asymmetry prevents collapse
+sigreg:
+  weight: 0.0                      # Disabled
+  num_slices: 1024
+  num_points: 17
+
+logging:
+  enabled: true
+  log_dir: artifacts/jepa/ijepa_v8/tensorboard
+  flush_secs: 10
+  run_name: jepa_ijepa_v8
+
+diagnostics:
+  embedding_metrics:
+    enabled: true
+    interval: 50
+    max_samples: 4096
