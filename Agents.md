@@ -2,6 +2,32 @@
 Read the docs: Project_Blueprint.md
 (Note keep this updated as the project plan evolves)
 
+## Current Status (2025-12-10)
+
+**JEPA v14 pretraining COMPLETE - Ready for Phase 1**
+
+- Checkpoint: `temp/lejepa_v14/checkpoint_epoch_0400.pt` (validated, local only - not in git)
+- Evaluation: see below
+- Next: Phase 1 - Program-Conditioned JEPA (epic: `arc-jepa-rl-fkt`)
+
+Key findings:
+- L-JEPA produces healthy representations (isotropy 0.86, effective rank 120)
+- Transformation discrimination is weak (by design - L-JEPA is view-invariant)
+- Phase 1 adds program conditioning to enable counterfactual latent prediction
+
+See `ACTIVE_REASONER_IMPLEMENTATION_GUIDE.md` for Phase 1 implementation details.
+
+### v14 Evaluation Results (Go/No-Go)
+
+| Metric | Value | Threshold | Status |
+|--------|-------|-----------|--------|
+| Effective Rank | 120.1 | ≥ 100 | ✅ PASS |
+| Isotropy Score | 0.864 | ≥ 0.7 | ✅ PASS |
+| Collapsed | No | No | ✅ PASS |
+| Linear Probe | 10.2% | N/A | Expected |
+
+**Decision: GO** - checkpoint provides healthy foundation for Phase 1.
+
 ## Issue Tracking with bd (beads)
 
 IMPORTANT: This project uses bd (beads) for ALL issue tracking. Do NOT use markdown TODOs, task lists, or other tracking methods.
@@ -152,6 +178,12 @@ Notes: CPU PyTorch is fine for smoke tests; keep epochs small and batch sizes mi
   2) On Paperspace, pull latest (`git pull`), create env (`uv venv --python 3.11 .venv`), and install deps with `uv pip install --python .venv/bin/python -r requirements.txt` (plus extras as needed).
   3) Run training scripts with GPU-enabled PyTorch; use curated configs.
   4) Persist artifacts (weights, JSON reports) back to repo or external storage as appropriate.
+
+### Checkpoint Storage
+- `temp/` and `artifacts/` are gitignored (checkpoints are too large for git)
+- Validated checkpoints should be documented in `Agents.md` with their local path
+- For sharing between machines: use external storage (cloud bucket, rsync, etc.)
+- Current validated checkpoint: `temp/lejepa_v14/checkpoint_epoch_0400.pt`
 
 ### Scripts Overview
 - `scripts/train_jepa.py` — object-centric JEPA helper (supports `--dry-run`).

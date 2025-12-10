@@ -246,7 +246,7 @@ class ObjectCentricJEPAExperiment:
         self._target_object_encoder = None
         self._target_projection_head = None
 
-        # I-JEPA predictor for asymmetric prediction
+        # Predictor for asymmetric prediction (I-JEPA and optionally SIGReg)
         self._predictor: JEPAPredictor | None = None
         if self.loss_config.objective == "ijepa":
             # For I-JEPA, we MUST use target encoder with stop-gradient
@@ -256,6 +256,17 @@ class ObjectCentricJEPAExperiment:
                 input_dim=embedding_dim,
                 hidden_dim=predictor_hidden,
                 output_dim=embedding_dim,  # Predict in embedding space, not projection space
+                depth=self.loss_config.predictor_depth,
+                activation="gelu",
+            ).to(self.device)
+        elif self.loss_config.objective == "sigreg" and self.loss_config.predictor_depth > 0:
+            # Optional predictor for SIGReg mode (per L-JEPA paper)
+            # Works in projection space for SIGReg
+            predictor_hidden = self.loss_config.predictor_hidden_dim or self.loss_config.projection_dim
+            self._predictor = JEPAPredictor(
+                input_dim=self.loss_config.projection_dim,
+                hidden_dim=predictor_hidden,
+                output_dim=self.loss_config.projection_dim,
                 depth=self.loss_config.predictor_depth,
                 activation="gelu",
             ).to(self.device)
@@ -514,7 +525,13 @@ class ObjectCentricJEPAExperiment:
                 # L-JEPA style: L2 predictive loss + SIGReg regularization
                 # Formula: (1-λ)L_pred + λ*SIGReg (from L-JEPA paper)
                 # No InfoNCE, no temperature, no queue needed
-                l2_loss = torch.nn.functional.mse_loss(context_proj, target_proj)
+                if self._predictor is not None:
+                    # Use predictor to transform context before comparing with target
+                    predicted_target = self._predictor(context_proj)
+                    l2_loss = torch.nn.functional.mse_loss(predicted_target, target_proj)
+                else:
+                    # Direct comparison without predictor
+                    l2_loss = torch.nn.functional.mse_loss(context_proj, target_proj)
                 info_nce_loss = None  # Not used in SIGReg mode
                 primary_loss = l2_loss
             else:

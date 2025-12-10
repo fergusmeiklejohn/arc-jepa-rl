@@ -3,6 +3,11 @@ Feedback.md
 # AI planning documents (ephemeral)
 history/
 
+# Model checkpoints and training artifacts (too large for git)
+artifacts/
+*.pt
+!configs/**/*.pt
+
 # External datasets / third-party repos
 external/
 __pycache__/
