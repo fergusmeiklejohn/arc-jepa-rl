@@ -157,6 +157,7 @@ def test_train_jepa_dry_run_cli(tmp_path, monkeypatch):
             ddp_backend="nccl",
             ddp_world_size=None,
             ddp_rank=None,
+            resume=None,
         ),
     )
 

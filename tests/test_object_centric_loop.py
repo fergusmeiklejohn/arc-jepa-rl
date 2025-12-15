@@ -230,18 +230,18 @@ def test_queue_commit_deferred_until_accumulated_step(monkeypatch):
     experiment = ObjectCentricJEPAExperiment(config)
 
     events = []
-    original_step = experiment._step_optimizer
+    original_optimizer_step = experiment.optimizer.step
     original_enqueue = experiment.queue.enqueue
 
-    def step_wrapper(loss):
+    def optimizer_step_wrapper(*args, **kwargs):
         events.append("step")
-        return original_step(loss)
+        return original_optimizer_step(*args, **kwargs)
 
     def enqueue_wrapper(tensor):
         events.append(f"enqueue:{tensor.shape[0]}")
         return original_enqueue(tensor)
 
-    monkeypatch.setattr(experiment, "_step_optimizer", step_wrapper)
+    monkeypatch.setattr(experiment.optimizer, "step", optimizer_step_wrapper)
     monkeypatch.setattr(experiment.queue, "enqueue", enqueue_wrapper)
 
     dataset = build_dummy_dataset(num_batches=3, context_length=experiment.context_length, batch_size=2)

@@ -1,0 +1,68 @@
+# Program-conditioned JEPA training configuration
+seed: 42
+
+data:
+  program_dataset: data/program_triples/manifest.jsonl
+  max_program_length: 4
+  val_split: 0.1
+  shuffle: true
+
+object_encoder:
+  hidden_dim: 128
+  num_embeddings: 256
+  commitment_cost: 0.25
+  ema_decay: 0.99
+  activation: "relu"
+
+tokenizer:
+  max_objects: 16
+  max_color_features: 8
+  normalize: true
+  respect_colors: true
+
+program_encoder:
+  program_embedding_dim: 128
+  hidden_dim: 128
+  num_layers: 2
+  dropout: 0.1
+  transition_hidden_dim: 256
+
+optimizer:
+  lr: 3.0e-4
+  weight_decay: 1.0e-5
+
+training:
+  batch_size: 32
+  epochs: 50
+  checkpoint_dir: artifacts/program_jepa/train
+  checkpoint_interval: 10
+  device: cpu
+  num_workers: 0
+  mixed_precision: "none"
+  grad_clip:
+    max_norm: 1.0
+    norm_type: 2.0
+  lr_scheduler:
+    name: "linear"
+    warmup_steps: 100
+    min_lr_scale: 0.1
+
+logging:
+  enabled: true
+  log_dir: artifacts/program_jepa/train/tensorboard
+  flush_secs: 15
+
+loss:
+  temperature: 0.1
+  temperature_min: 0.05
+  temperature_max: 0.5
+  learnable_temperature: true
+  queue_size: 512
+  projection_dim: 128
+  projection_layers: 2
+  projection_activation: "relu"
+
+sigreg:
+  weight: 0.1
+  num_slices: 256
+  num_points: 13

@@ -22,6 +22,7 @@ from .loop import (
     ObjectCentricJEPAExperiment,
     OptimizerConfig,
     TrainStepResult,
+    InfoNCELossConfig,
 )
 from .relational_loss import RelationalConsistencyConfig
 from .invariance import InvarianceLossConfig
@@ -58,6 +59,7 @@ __all__ = [
     "ObjectCentricJEPAExperiment",
     "OptimizerConfig",
     "TrainStepResult",
+    "InfoNCELossConfig",
     "RelationalConsistencyConfig",
     "GridPairBatch",
     "InMemoryGridPairDataset",
